@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -29,6 +30,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="AI Outcome Assurance", lifespan=lifespan)
+
+# Local-demo CORS: the operator UI (Vite dev server) runs on a different port
+# than the API, so browsers issue CORS preflight requests for every mutating
+# call. Wide open here because this is a same-machine offline demo with no
+# auth and no real user data — see docs/security.md.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def get_db() -> Iterator[Session]:

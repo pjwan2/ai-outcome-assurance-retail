@@ -214,7 +214,7 @@ function ReviewQueue({ reviews, onDecided }: { reviews: ReviewTask[]; onDecided:
 
   return (
     <Card title="Pending review tasks" hint={`${reviews.length} total`}>
-      {reviews.length === 0 && <p className="muted">No review tasks.</p>}
+      {reviews.length === 0 && <p className="empty-state">No review tasks.</p>}
       {reviews.map((r) => (
         <div key={r.review_id} className="review-card">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -333,6 +333,33 @@ function TraceAndRelease({
   );
 }
 
+const TAB_ICONS: Record<Tab, React.ReactNode> = {
+  "Case Overview": (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="3.5" y="4" width="17" height="16" rx="2.5" />
+      <path d="M8 9h8M8 13h8M8 17h4" strokeLinecap="round" />
+    </svg>
+  ),
+  "Evidence & Claims": (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3l7 3.2v5.4c0 4.6-3 8.3-7 9.4-4-1.1-7-4.8-7-9.4V6.2L12 3z" />
+      <path d="M9 12l2 2 4-4.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  "Review Queue": (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5v5l3.2 2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  "Trace & Release": (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M4 6h16M4 12h16M4 18h10" strokeLinecap="round" />
+      <circle cx="18" cy="18" r="2.4" />
+    </svg>
+  ),
+};
+
 const TAB_META: Record<Tab, { eyebrow: string; subtitle: string }> = {
   "Case Overview": {
     eyebrow: "Case",
@@ -412,14 +439,20 @@ export default function App() {
             <div className="brand-subtext">Synthetic retail prototype</div>
           </div>
         </div>
+        <div className="sidebar-section-label">Case CASE-RET-001</div>
         <nav className="sidebar-nav">
           {TABS.map((t) => (
             <button key={t} className={`nav-item ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
-              <span className="nav-icon" />
+              {TAB_ICONS[t]}
               {t}
             </button>
           ))}
         </nav>
+        <div className="sidebar-footer">
+          Independent public-retail prototype.
+          <br />
+          Not legal advice. Not a production deployment.
+        </div>
       </aside>
 
       <main className="main">
