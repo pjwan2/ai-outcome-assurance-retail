@@ -1,0 +1,8 @@
+{
+  "valid_bindings": [
+    {"order_ref": "ORD-1001", "seller_ref": "SELLER-900", "product_ref": "PROD-LAPTOP-01"},
+    {"order_ref": "ORD-1002", "seller_ref": "SELLER-901", "product_ref": "PROD-LAPTOP-02"},
+    {"order_ref": "ORD-1003", "seller_ref": "SELLER-902", "product_ref": "PROD-TABLET-01"},
+    {"order_ref": "ORD-1004", "seller_ref": "SELLER-903", "product_ref": "PROD-MONITOR-01"}
+  ]
+}
