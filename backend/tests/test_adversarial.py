@@ -112,6 +112,13 @@ def test_contradictory_fault_assessments_resolve_to_unknown():
     assert "CONTRADICTION_PRESENT" in major_failure.reason_codes
 
 
+def test_contradiction_populates_counter_evidence_ids():
+    case = _case("ADV-07B", ["SRC-FAULT-CONTRA-A", "SRC-FAULT-CONTRA-B"])
+    artifacts = run_case_pipeline(case, _sources_for(case["source_refs"]))
+    major_failure = next(c for c in artifacts.claims if c.claim_type == "MAJOR_FAILURE_ESTABLISHED")
+    assert major_failure.counter_evidence_ids == ["EVID-SRC-FAULT-CONTRA-B"]
+
+
 # 8. Missing fault assessment
 def test_missing_fault_assessment_keeps_major_failure_unknown():
     case = _case("ADV-08", ["SRC-KOGAN-GUARANTEE", "SRC-ACCC-RIGHTS"])

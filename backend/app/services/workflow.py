@@ -232,19 +232,27 @@ def _resolve(case: dict[str, Any], evidence: list[Evidence], trace: _TraceRecord
 
     claims: list[Claim] = []
 
-    def add_claim(claim_type: str, status: ClaimStatus, reason_codes: list[str], evidence_ids: list[str]) -> None:
+    def add_claim(
+        claim_type: str,
+        status: ClaimStatus,
+        reason_codes: list[str],
+        evidence_ids: list[str],
+        counter_evidence_ids: list[str] | None = None,
+    ) -> None:
         claim = Claim(
             claim_id=f"CLAIM-{case['case_id']}-{claim_type}",
             case_id=case["case_id"],
             claim_type=claim_type,
             status=status,
             evidence_ids=evidence_ids,
-            counter_evidence_ids=[],
+            counter_evidence_ids=counter_evidence_ids or [],
             rule_version=RULE_VERSION,
             reason_codes=reason_codes,
         )
         claims.append(claim)
-        trace.record("RESOLVE", "CLAIM_RESOLVED", evidence_ids=evidence_ids)
+        trace.record(
+            "RESOLVE", "CLAIM_RESOLVED", evidence_ids=evidence_ids + (counter_evidence_ids or [])
+        )
 
     binding_match = any(
         b["order_ref"] == case["order_ref"]
@@ -289,12 +297,21 @@ def _resolve(case: dict[str, Any], evidence: list[Evidence], trace: _TraceRecord
         [e.evidence_id for e in escalation_evidence],
     )
 
+    contradictory = any("CONTRADICTION_PRESENT" in e.validation_reasons for e in evidence)
+    # Contradictory fault sources are excluded from `admitted` (they carry a blocking reason),
+    # but the contradiction itself — and which sources disagree — must still be visible on the
+    # claim, so pull fault-shaped evidence from the full validated set when a contradiction exists.
+    fault_pool = evidence if contradictory else admitted
     fault_evidence = [
         e
-        for e in admitted
+        for e in fault_pool
         if "major failure" in e.excerpt.lower() or "minor" in e.excerpt.lower() or "cosmetic" in e.excerpt.lower()
     ]
-    contradictory = any("CONTRADICTION_PRESENT" in e.validation_reasons for e in evidence)
+
+    # Split fault evidence into "supports major failure" vs "supports minor/cosmetic" so a
+    # contradiction carries explicit counter-evidence IDs, not just a flag.
+    major_supporting = [e for e in fault_evidence if "major failure" in e.excerpt.lower()]
+    minor_supporting = [e for e in fault_evidence if "minor" in e.excerpt.lower() or "cosmetic" in e.excerpt.lower()]
 
     add_claim(
         "FAULT_ASSESSMENT_AVAILABLE",
@@ -306,24 +323,35 @@ def _resolve(case: dict[str, Any], evidence: list[Evidence], trace: _TraceRecord
     if contradictory:
         major_failure_status = ClaimStatus.UNKNOWN
         major_failure_reasons = ["CONTRADICTION_PRESENT"]
+        major_failure_evidence = [e.evidence_id for e in major_supporting]
+        major_failure_counter_evidence = [e.evidence_id for e in minor_supporting]
     elif not fault_evidence:
         major_failure_status = ClaimStatus.UNKNOWN
         major_failure_reasons = ["FAULT_ASSESSMENT_UNAVAILABLE"]
-    elif any("minor" in e.excerpt.lower() or "cosmetic" in e.excerpt.lower() for e in fault_evidence):
+        major_failure_evidence = []
+        major_failure_counter_evidence = []
+    elif minor_supporting:
         major_failure_status = ClaimStatus.FALSE
         major_failure_reasons = ["FAULT_ASSESSMENT_CONFIRMS_MINOR_FAULT"]
-    elif any("major failure" in e.excerpt.lower() for e in fault_evidence):
+        major_failure_evidence = [e.evidence_id for e in minor_supporting]
+        major_failure_counter_evidence = []
+    elif major_supporting:
         major_failure_status = ClaimStatus.TRUE
         major_failure_reasons = ["FAULT_ASSESSMENT_CONFIRMS_MAJOR_FAILURE"]
+        major_failure_evidence = [e.evidence_id for e in major_supporting]
+        major_failure_counter_evidence = []
     else:
         major_failure_status = ClaimStatus.UNKNOWN
         major_failure_reasons = ["FAULT_ASSESSMENT_INCONCLUSIVE"]
+        major_failure_evidence = []
+        major_failure_counter_evidence = []
 
     add_claim(
         "MAJOR_FAILURE_ESTABLISHED",
         major_failure_status,
         major_failure_reasons,
-        [e.evidence_id for e in fault_evidence],
+        major_failure_evidence,
+        counter_evidence_ids=major_failure_counter_evidence,
     )
 
     add_claim(

@@ -4,89 +4,126 @@ import { api, AuthorityRecord, Claim, Evidence, ReleaseResult, ReviewTask, Trace
 const TABS = ["Case Overview", "Evidence & Claims", "Review Queue", "Trace & Release"] as const;
 type Tab = (typeof TABS)[number];
 
-function Badge({ children, tone }: { children: React.ReactNode; tone: "neutral" | "good" | "warn" | "bad" }) {
-  const colors: Record<string, string> = {
-    neutral: "#e5e7eb",
-    good: "#bbf7d0",
-    warn: "#fef08a",
-    bad: "#fecaca",
-  };
-  return (
-    <span
-      style={{
-        background: colors[tone],
-        borderRadius: 4,
-        padding: "2px 8px",
-        fontSize: 12,
-        fontWeight: 600,
-        marginRight: 6,
-        display: "inline-block",
-      }}
-    >
-      {children}
-    </span>
-  );
+type Tone = "neutral" | "good" | "warn" | "bad";
+
+function Pill({ children, tone }: { children: React.ReactNode; tone: Tone }) {
+  return <span className={`pill pill-${tone}`}>{children}</span>;
 }
 
-function claimTone(status: string): "good" | "warn" | "bad" {
+function claimTone(status: string): Tone {
   if (status === "TRUE") return "good";
   if (status === "UNKNOWN") return "warn";
   return "bad";
 }
 
-function decisionTone(decision: string): "good" | "warn" | "bad" {
+function decisionTone(decision: string): Tone {
   if (decision === "ALLOW") return "good";
   if (decision === "REQUIRE_HUMAN") return "warn";
   return "bad";
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function statusTone(status: string): Tone {
+  if (status === "COMPLETED") return "good";
+  if (status === "NEEDS_REVIEW") return "warn";
+  if (status === "CONTROL_BLOCKED" || status === "TECHNICAL_FAILURE") return "bad";
+  return "neutral";
+}
+
+function Card({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div style={{ marginBottom: 24 }}>
-      <h3 style={{ borderBottom: "1px solid #e5e7eb", paddingBottom: 6 }}>{title}</h3>
+    <div className="card">
+      <div className="card-title-row">
+        <h3 className="card-title">{title}</h3>
+        {hint && <span className="card-hint">{hint}</span>}
+      </div>
       {children}
     </div>
   );
 }
 
+function Skeleton() {
+  return (
+    <div className="card">
+      <div className="skeleton-line" style={{ width: "40%" }} />
+      <div className="skeleton-line" style={{ width: "70%" }} />
+      <div className="skeleton-line" style={{ width: "55%" }} />
+    </div>
+  );
+}
+
 function CaseOverview({ caseSummary, authority }: { caseSummary: CaseSummary | null; authority: AuthorityRecord[] }) {
-  if (!caseSummary) return <p>Loading case…</p>;
+  if (!caseSummary) return <Skeleton />;
   const latestAuthority = authority[authority.length - 1];
   return (
     <div>
-      <Section title="Synthetic order / seller / product">
-        <table>
-          <tbody>
-            <tr><td style={{ paddingRight: 16, color: "#666" }}>Case</td><td>{caseSummary.case_id}</td></tr>
-            <tr><td style={{ paddingRight: 16, color: "#666" }}>Order</td><td>{caseSummary.order_ref}</td></tr>
-            <tr><td style={{ paddingRight: 16, color: "#666" }}>Seller</td><td>{caseSummary.seller_ref}</td></tr>
-            <tr><td style={{ paddingRight: 16, color: "#666" }}>Product</td><td>{caseSummary.product_ref}</td></tr>
-            <tr><td style={{ paddingRight: 16, color: "#666" }}>Risk band</td><td>{caseSummary.risk_band}</td></tr>
-            <tr><td style={{ paddingRight: 16, color: "#666" }}>State version</td><td>{caseSummary.state_version}</td></tr>
-          </tbody>
-        </table>
-      </Section>
-      <Section title="Current state and termination status">
-        <Badge tone="neutral">{caseSummary.status}</Badge>
-      </Section>
-      <Section title="Proposed action versus authority decision">
-        {latestAuthority ? (
-          <div>
-            <p><strong>Proposed action:</strong> {latestAuthority.proposed_action}</p>
-            <p>
-              <strong>Authority decision:</strong>{" "}
-              <Badge tone={decisionTone(latestAuthority.decision)}>{latestAuthority.decision}</Badge>
-            </p>
-            <p><strong>Reason codes:</strong> {latestAuthority.reason_codes.join(", ")}</p>
+      <div className="stat-grid">
+        <div className="stat-tile">
+          <div className="stat-tile-label">Case status</div>
+          <div className="stat-tile-value">
+            <Pill tone={statusTone(caseSummary.status)}>{caseSummary.status}</Pill>
           </div>
+        </div>
+        <div className="stat-tile">
+          <div className="stat-tile-label">Authority decision</div>
+          <div className="stat-tile-value">
+            {latestAuthority ? (
+              <Pill tone={decisionTone(latestAuthority.decision)}>{latestAuthority.decision}</Pill>
+            ) : (
+              <span className="muted">—</span>
+            )}
+          </div>
+        </div>
+        <div className="stat-tile">
+          <div className="stat-tile-label">Investigation mode</div>
+          <div className="stat-tile-value">
+            <Pill tone="neutral">DETERMINISTIC</Pill>
+          </div>
+        </div>
+      </div>
+
+      <Card title="Synthetic order · seller · product">
+        <dl className="kv-grid">
+          <dt>Case</dt>
+          <dd>{caseSummary.case_id}</dd>
+          <dt>Order</dt>
+          <dd>{caseSummary.order_ref}</dd>
+          <dt>Seller</dt>
+          <dd>{caseSummary.seller_ref}</dd>
+          <dt>Product</dt>
+          <dd>{caseSummary.product_ref}</dd>
+          <dt>Risk band</dt>
+          <dd>{caseSummary.risk_band}</dd>
+          <dt>State version</dt>
+          <dd>{caseSummary.state_version}</dd>
+        </dl>
+      </Card>
+
+      <Card title="Proposed action vs. authority decision">
+        {latestAuthority ? (
+          <dl className="kv-grid">
+            <dt>Proposed action</dt>
+            <dd>{latestAuthority.proposed_action}</dd>
+            <dt>Decision</dt>
+            <dd>
+              <Pill tone={decisionTone(latestAuthority.decision)}>{latestAuthority.decision}</Pill>
+            </dd>
+            <dt>Reason codes</dt>
+            <dd>{latestAuthority.reason_codes.join(", ")}</dd>
+            <dt>Required role</dt>
+            <dd>{latestAuthority.required_role}</dd>
+          </dl>
         ) : (
-          <p>No authority record yet.</p>
+          <p className="muted">No authority record yet.</p>
         )}
-      </Section>
-      <Section title="Investigation mode">
-        <Badge tone="neutral">DETERMINISTIC (offline)</Badge>
-        <span style={{ color: "#666", fontSize: 13 }}> — no model API key configured for this run.</span>
-      </Section>
+      </Card>
     </div>
   );
 }
@@ -94,46 +131,65 @@ function CaseOverview({ caseSummary, authority }: { caseSummary: CaseSummary | n
 function EvidenceAndClaims({ evidence, claims }: { evidence: Evidence[]; claims: Claim[] }) {
   return (
     <div>
-      <Section title="Verified evidence (admitted after validation)">
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <Card title="Verified evidence" hint={`${evidence.length} admitted after validation`}>
+        <table className="data-table">
           <thead>
-            <tr style={{ textAlign: "left", color: "#666" }}>
-              <th>Source</th><th>Locator</th><th>Authority</th><th>Entity binding</th><th>Support</th><th>Reasons</th>
+            <tr>
+              <th>Source</th>
+              <th>Locator</th>
+              <th>Authority</th>
+              <th>Entity binding</th>
+              <th>Support</th>
+              <th>Reasons</th>
             </tr>
           </thead>
           <tbody>
             {evidence.map((e) => (
-              <tr key={e.evidence_id} style={{ borderTop: "1px solid #eee" }}>
-                <td>{e.source_id}</td>
-                <td>{e.locator}</td>
-                <td><Badge tone={e.authority_status === "VALID" ? "good" : "bad"}>{e.authority_status}</Badge></td>
-                <td><Badge tone={e.entity_binding_status === "VALID" ? "good" : "bad"}>{e.entity_binding_status}</Badge></td>
-                <td><Badge tone={e.support_status === "SUPPORTED" ? "good" : "bad"}>{e.support_status}</Badge></td>
-                <td style={{ fontSize: 12, color: "#666" }}>{e.validation_reasons.join(", ") || "—"}</td>
+              <tr key={e.evidence_id}>
+                <td className="mono">{e.source_id}</td>
+                <td className="mono">{e.locator}</td>
+                <td>
+                  <Pill tone={e.authority_status === "VALID" ? "good" : "bad"}>{e.authority_status}</Pill>
+                </td>
+                <td>
+                  <Pill tone={e.entity_binding_status === "VALID" ? "good" : "bad"}>{e.entity_binding_status}</Pill>
+                </td>
+                <td>
+                  <Pill tone={e.support_status === "SUPPORTED" ? "good" : "bad"}>{e.support_status}</Pill>
+                </td>
+                <td className="muted">{e.validation_reasons.join(", ") || "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </Section>
-      <Section title="Claims (tri-state)">
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      </Card>
+
+      <Card title="Claims" hint="tri-state: TRUE / FALSE / UNKNOWN">
+        <table className="data-table">
           <thead>
-            <tr style={{ textAlign: "left", color: "#666" }}>
-              <th>Claim</th><th>Status</th><th>Reason codes</th><th>Evidence</th>
+            <tr>
+              <th>Claim</th>
+              <th>Status</th>
+              <th>Reason codes</th>
+              <th>Evidence</th>
+              <th>Counter-evidence</th>
             </tr>
           </thead>
           <tbody>
             {claims.map((c) => (
-              <tr key={c.claim_id} style={{ borderTop: "1px solid #eee" }}>
+              <tr key={c.claim_id}>
                 <td>{c.claim_type}</td>
-                <td><Badge tone={claimTone(c.status)}>{c.status}</Badge></td>
-                <td style={{ fontSize: 12, color: "#666" }}>{c.reason_codes.join(", ")}</td>
-                <td style={{ fontSize: 12 }}>{c.evidence_ids.join(", ") || "—"}</td>
+                <td>
+                  <Pill tone={claimTone(c.status)}>{c.status}</Pill>
+                </td>
+                <td className="muted">{c.reason_codes.join(", ")}</td>
+                <td className="mono muted">{c.evidence_ids.join(", ") || "—"}</td>
+                <td className="mono muted">{c.counter_evidence_ids.join(", ") || "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </Section>
+      </Card>
     </div>
   );
 }
@@ -157,33 +213,48 @@ function ReviewQueue({ reviews, onDecided }: { reviews: ReviewTask[]; onDecided:
   }
 
   return (
-    <Section title="Pending review tasks">
-      {reviews.length === 0 && <p>No review tasks.</p>}
+    <Card title="Pending review tasks" hint={`${reviews.length} total`}>
+      {reviews.length === 0 && <p className="muted">No review tasks.</p>}
       {reviews.map((r) => (
-        <div key={r.review_id} style={{ border: "1px solid #e5e7eb", borderRadius: 6, padding: 12, marginBottom: 12 }}>
-          <p><strong>{r.review_id}</strong> — case {r.case_id}</p>
-          <p style={{ fontSize: 13, color: "#666" }}>Reason: {r.reason_codes.join(", ")}</p>
-          <p><Badge tone={r.status === "PENDING" ? "warn" : "neutral"}>{r.status}</Badge> assigned to {r.assigned_role}</p>
+        <div key={r.review_id} className="review-card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span className="review-id">
+              {r.review_id} · {r.case_id}
+            </span>
+            <Pill tone={r.status === "PENDING" ? "warn" : "neutral"}>{r.status}</Pill>
+          </div>
+          <p className="muted" style={{ margin: "0 0 6px" }}>
+            Reason: {r.reason_codes.join(", ")}
+          </p>
+          <p className="muted" style={{ margin: 0 }}>
+            Assigned to {r.assigned_role}
+          </p>
           {r.reviewer_decision && (
-            <p style={{ fontSize: 13 }}>Reviewer decision: {r.reviewer_decision} ({r.reviewer_id})</p>
+            <p style={{ fontSize: 13, marginTop: 8 }}>
+              Reviewer decision: <strong>{r.reviewer_decision}</strong> ({r.reviewer_id})
+            </p>
           )}
           {r.status === "PENDING" && (
             <div>
-              <button disabled={busy === r.review_id} onClick={() => decide(r, "REQUEST_MORE_EVIDENCE")}>
-                Request more evidence
-              </button>{" "}
-              <button disabled={busy === r.review_id} onClick={() => decide(r, "APPROVE_ESCALATION")}>
-                Approve escalation
-              </button>{" "}
-              <button disabled={busy === r.review_id} onClick={() => decide(r, "REJECT_ROUTE")}>
-                Reject route
-              </button>
-              <p style={{ fontSize: 11, color: "#999" }}>No "approve refund" control exists in this demo.</p>
+              <div className="btn-row">
+                <button className="btn" disabled={busy === r.review_id} onClick={() => decide(r, "REQUEST_MORE_EVIDENCE")}>
+                  Request more evidence
+                </button>
+                <button className="btn btn-primary" disabled={busy === r.review_id} onClick={() => decide(r, "APPROVE_ESCALATION")}>
+                  Approve escalation
+                </button>
+                <button className="btn" disabled={busy === r.review_id} onClick={() => decide(r, "REJECT_ROUTE")}>
+                  Reject route
+                </button>
+              </div>
+              <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
+                No "approve refund" control exists in this demo.
+              </p>
             </div>
           )}
         </div>
       ))}
-    </Section>
+    </Card>
   );
 }
 
@@ -200,50 +271,86 @@ function TraceAndRelease({
 }) {
   return (
     <div>
-      <Section title="Ordered state transitions and tool calls">
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <Card title="Ordered state transitions and tool calls" hint={`${trace.length} events`}>
+        <table className="data-table">
           <thead>
-            <tr style={{ textAlign: "left", color: "#666" }}>
-              <th>#</th><th>Stage</th><th>Event</th><th>Tool</th>
+            <tr>
+              <th>#</th>
+              <th>Stage</th>
+              <th>Event</th>
+              <th>Tool</th>
             </tr>
           </thead>
           <tbody>
             {trace.map((t) => (
-              <tr key={t.sequence} style={{ borderTop: "1px solid #eee" }}>
-                <td>{t.sequence}</td><td>{t.stage}</td><td>{t.event_type}</td><td>{t.tool_name ?? "—"}</td>
+              <tr key={t.sequence}>
+                <td className="mono">{t.sequence}</td>
+                <td>{t.stage}</td>
+                <td>{t.event_type}</td>
+                <td className="muted">{t.tool_name ?? "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </Section>
-      <Section title="Evaluation and release gate">
-        <button onClick={onRunRelease} disabled={loadingRelease}>
+      </Card>
+
+      <Card title="Evaluation and release gate">
+        <button className="btn btn-primary" onClick={onRunRelease} disabled={loadingRelease}>
           {loadingRelease ? "Running R1 + R2…" : "Run release gate (R1 reference + R2 regression fixture)"}
         </button>
         {release && (
-          <div style={{ marginTop: 12 }}>
-            <p>
-              <strong>{release.config_name}:</strong>{" "}
-              <Badge tone={release.decision === "PASS" ? "good" : "bad"}>{release.decision}</Badge>
-              {" "}critical positives recovered {release.critical_positive_recovered}/{release.critical_positive_total}
-              {" "}(Wilson 95% lower bound {release.critical_recall_wilson_lower_bound_95.toFixed(3)})
+          <div style={{ marginTop: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+              <strong style={{ fontSize: 13.5 }}>{release.config_name}</strong>
+              <Pill tone={release.decision === "PASS" ? "good" : "bad"}>{release.decision}</Pill>
+            </div>
+            <p className="muted" style={{ margin: "0 0 4px" }}>
+              Critical positives recovered {release.critical_positive_recovered}/{release.critical_positive_total} ·
+              Wilson 95% lower bound {release.critical_recall_wilson_lower_bound_95.toFixed(3)}
             </p>
-            {release.reason_codes.length > 0 && <p style={{ fontSize: 13, color: "#666" }}>Reasons: {release.reason_codes.join(", ")}</p>}
-            {release.regression_fixture_check && (
-              <p style={{ marginTop: 8 }}>
-                <strong>{release.regression_fixture_check.config_name}</strong> (deliberately degraded regression fixture, not a production result):{" "}
-                <Badge tone={release.regression_fixture_check.decision === "PASS" ? "good" : "bad"}>
-                  {release.regression_fixture_check.decision}
-                </Badge>{" "}
-                {release.regression_fixture_check.reason_codes.join(", ")}
+            {release.reason_codes.length > 0 && (
+              <p className="muted" style={{ margin: 0 }}>
+                Reasons: {release.reason_codes.join(", ")}
               </p>
+            )}
+            {release.regression_fixture_check && (
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--color-border-subtle)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <strong style={{ fontSize: 13.5 }}>{release.regression_fixture_check.config_name}</strong>
+                  <Pill tone={release.regression_fixture_check.decision === "PASS" ? "good" : "bad"}>
+                    {release.regression_fixture_check.decision}
+                  </Pill>
+                </div>
+                <p className="muted" style={{ margin: 0 }}>
+                  Deliberately degraded regression fixture, not a production result — {release.regression_fixture_check.reason_codes.join(", ")}
+                </p>
+              </div>
             )}
           </div>
         )}
-      </Section>
+      </Card>
     </div>
   );
 }
+
+const TAB_META: Record<Tab, { eyebrow: string; subtitle: string }> = {
+  "Case Overview": {
+    eyebrow: "Case",
+    subtitle: "Synthetic order/seller/product timeline, current state, and the proposed action vs. what authority actually decided.",
+  },
+  "Evidence & Claims": {
+    eyebrow: "Investigation",
+    subtitle: "Candidate material separated from verified evidence, and every claim resolved to TRUE, FALSE, or UNKNOWN — never guessed.",
+  },
+  "Review Queue": {
+    eyebrow: "Human-in-the-loop",
+    subtitle: "Pending review reasons with evidence/claim/authority context. No refund-approval control exists here by design.",
+  },
+  "Trace & Release": {
+    eyebrow: "Audit",
+    subtitle: "Ordered trace of every material transition, plus a deterministic release gate run on demand.",
+  },
+};
 
 export default function App() {
   const [tab, setTab] = React.useState<Tab>("Case Overview");
@@ -293,41 +400,46 @@ export default function App() {
     }
   }
 
-  return (
-    <div style={{ fontFamily: "-apple-system, Segoe UI, sans-serif", maxWidth: 1000, margin: "1.5rem auto", padding: "0 1rem" }}>
-      <h1 style={{ marginBottom: 4 }}>AI Outcome Assurance</h1>
-      <p style={{ color: "#666", marginTop: 0 }}>
-        Independent public-retail prototype. Not legal advice, not a production deployment.
-      </p>
-      {error && <p style={{ color: "#b91c1c" }}>Error: {error} (is the backend running on :8000?)</p>}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20, borderBottom: "2px solid #e5e7eb" }}>
-        {TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              padding: "8px 12px",
-              border: "none",
-              background: "none",
-              borderBottom: tab === t ? "2px solid #111" : "2px solid transparent",
-              marginBottom: -2,
-              fontWeight: tab === t ? 700 : 400,
-              cursor: "pointer",
-            }}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+  const meta = TAB_META[tab];
 
-      {tab === "Case Overview" && <CaseOverview caseSummary={caseSummary} authority={authority} />}
-      {tab === "Evidence & Claims" && <EvidenceAndClaims evidence={evidence} claims={claims} />}
-      {tab === "Review Queue" && (
-        <ReviewQueue reviews={reviews} onDecided={() => caseSummary && loadCaseData(caseSummary.case_id)} />
-      )}
-      {tab === "Trace & Release" && (
-        <TraceAndRelease trace={trace} release={release} onRunRelease={runReleaseGate} loadingRelease={loadingRelease} />
-      )}
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark" />
+          <div>
+            <div className="brand-text">AI Outcome Assurance</div>
+            <div className="brand-subtext">Synthetic retail prototype</div>
+          </div>
+        </div>
+        <nav className="sidebar-nav">
+          {TABS.map((t) => (
+            <button key={t} className={`nav-item ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
+              <span className="nav-icon" />
+              {t}
+            </button>
+          ))}
+        </nav>
+      </aside>
+
+      <main className="main">
+        <div className="page-header">
+          <p className="eyebrow">{meta.eyebrow}</p>
+          <h1 className="page-title">{tab}</h1>
+          <p className="page-subtitle">{meta.subtitle}</p>
+        </div>
+
+        {error && <div className="banner">Error: {error} (is the backend running on :8000?)</div>}
+
+        {tab === "Case Overview" && <CaseOverview caseSummary={caseSummary} authority={authority} />}
+        {tab === "Evidence & Claims" && <EvidenceAndClaims evidence={evidence} claims={claims} />}
+        {tab === "Review Queue" && (
+          <ReviewQueue reviews={reviews} onDecided={() => caseSummary && loadCaseData(caseSummary.case_id)} />
+        )}
+        {tab === "Trace & Release" && (
+          <TraceAndRelease trace={trace} release={release} onRunRelease={runReleaseGate} loadingRelease={loadingRelease} />
+        )}
+      </main>
     </div>
   );
 }
