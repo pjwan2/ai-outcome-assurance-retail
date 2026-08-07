@@ -206,6 +206,14 @@ body {
   opacity: 0.85;
 }
 
+.sidebar-hint {
+  font-size: 11px;
+  color: var(--sidebar-text-dim);
+  line-height: 1.5;
+  padding: 8px 4px 0;
+  margin: 0;
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding: 12px;

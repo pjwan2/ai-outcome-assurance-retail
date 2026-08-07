@@ -389,6 +389,7 @@ export default function App() {
   const [reviews, setReviews] = React.useState<ReviewTask[]>([]);
   const [release, setRelease] = React.useState<ReleaseResult | null>(null);
   const [loadingRelease, setLoadingRelease] = React.useState(false);
+  const [creatingCase, setCreatingCase] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   const loadCaseData = React.useCallback(async (caseId: string) => {
@@ -406,17 +407,24 @@ export default function App() {
     setReviews(reviewsData);
   }, []);
 
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const created = await api.createCase();
-        setCaseSummary(created);
-        await loadCaseData(created.case_id);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
+  const runNewCase = React.useCallback(async () => {
+    setCreatingCase(true);
+    setError(null);
+    try {
+      const created = await api.createCase();
+      setCaseSummary(created);
+      await loadCaseData(created.case_id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreatingCase(false);
+    }
   }, [loadCaseData]);
+
+  React.useEffect(() => {
+    runNewCase();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function runReleaseGate() {
     setLoadingRelease(true);
@@ -439,7 +447,9 @@ export default function App() {
             <div className="brand-subtext">Synthetic retail prototype</div>
           </div>
         </div>
-        <div className="sidebar-section-label">Case CASE-RET-001</div>
+        <div className="sidebar-section-label">
+          Case {caseSummary?.case_id ?? "…"} · v{caseSummary?.state_version ?? "–"}
+        </div>
         <nav className="sidebar-nav">
           {TABS.map((t) => (
             <button key={t} className={`nav-item ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
@@ -448,6 +458,13 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <button className="btn btn-primary" style={{ margin: "16px 4px 0", width: "calc(100% - 8px)" }} onClick={runNewCase} disabled={creatingCase}>
+          {creatingCase ? "Running…" : "Run new case"}
+        </button>
+        <p className="sidebar-hint">
+          Re-runs the deterministic pipeline on the same hero fixture and opens a fresh, undecided
+          review task so you can try the Review Queue actions again.
+        </p>
         <div className="sidebar-footer">
           Independent public-retail prototype.
           <br />
