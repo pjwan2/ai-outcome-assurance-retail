@@ -1,5 +1,8 @@
 # AI Outcome Assurance
 
+[![CI](https://github.com/pjwan2/ai-outcome-assurance-retail/actions/workflows/ci.yml/badge.svg)](https://github.com/pjwan2/ai-outcome-assurance-retail/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Runnable, checkable, reviewable, explicitly-bounded prototype: before relying on an AI-supported retail
 outcome, can an operator reconstruct the case, the exact evidence, the claim logic, the authority
 decision, the review route, and the observed result?
@@ -13,7 +16,7 @@ enterprise safety. All orders/sellers/customers/products/reviewers are synthetic
 ```bash
 make setup
 make migrate
-make test        # 30 tests
+make test        # 36 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON
@@ -27,13 +30,22 @@ cd backend && python run_server.py     # http://127.0.0.1:8000
 cd frontend && npm run dev             # http://localhost:5173
 ```
 
+Or with Docker (Dockerfiles/compose are written but not build-verified in this repo's own CI sandbox —
+please confirm on your machine):
+
+```bash
+docker compose up --build              # backend :8000, frontend :5173
+```
+
 No API key is required anywhere in this repository — the only investigation planner implemented is
 deterministic and offline.
 
 ## What's here
 
 - **Deterministic control chain**: `backend/app/services/workflow.py` — CASE → INVESTIGATE → VALIDATE →
-  RESOLVE → AUTHORISE → RECONCILE, with a `TraceEvent` per material step.
+  RESOLVE → AUTHORISE → RECONCILE, with an enforced `CaseStatus` state machine
+  (`app/state_machine.py`) and a SHA-256 hash-chained `TraceEvent` per material step
+  (`GET /api/cases/{case_id}/trace/verify`).
 - **Typed persistence**: SQLAlchemy 2 + Alembic (`backend/app/orm_models.py`, `backend/alembic/`).
 - **Tri-state claims, independent authority gate, human review queue** — never an LLM prompt
   (`app/services/workflow.py::_authorise`, `app/authority_enforcement.py`).

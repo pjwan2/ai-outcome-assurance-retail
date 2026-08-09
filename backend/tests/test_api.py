@@ -46,6 +46,11 @@ def test_case_lifecycle_and_review_flow(client):
 
     trace = client.get(f"/api/cases/{case_id}/trace").json()
     assert len(trace) >= 6
+    assert all(t["state_after_hash"] for t in trace)
+
+    verify_resp = client.get(f"/api/cases/{case_id}/trace/verify").json()
+    assert verify_resp["chain_verified"] is True
+    assert verify_resp["event_count"] == len(trace)
 
     reviews = client.get("/api/reviews").json()
     assert any(r["case_id"] == case_id for r in reviews)

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import Base, SessionLocal, engine
 from app.evaluation import run_evaluation
+from app.models import TraceEvent
 from app.orm_models import CaseORM, ReviewTaskORM
 from app.persistence import (
     persist_case_run,
@@ -20,7 +21,7 @@ from app.persistence import (
 )
 from app.release_gate import run_regression_release_gate, run_release_gate
 from app.reviews import ReviewAlreadyDecidedError, decide_review
-from app.services.workflow import run_case_pipeline, run_case_workflow
+from app.services.workflow import run_case_pipeline, run_case_workflow, verify_trace_chain
 
 
 @asynccontextmanager
@@ -190,10 +191,42 @@ def get_case_trace(case_id: str, db: Session = Depends(get_db)) -> list[dict]:
             "event_type": t.event_type,
             "tool_name": t.tool_name,
             "evidence_ids": t.evidence_ids,
+            "argument_hash": t.argument_hash,
+            "result_hash": t.result_hash,
+            "state_before_hash": t.state_before_hash,
+            "state_after_hash": t.state_after_hash,
             "timestamp": t.timestamp.isoformat() if t.timestamp else None,
         }
         for t in case.trace_events
     ]
+
+
+@app.get("/api/cases/{case_id}/trace/verify")
+def verify_case_trace(case_id: str, db: Session = Depends(get_db)) -> dict:
+    """Recompute the trace's hash chain from its stored events and confirm
+    nothing was inserted, reordered, or edited after the fact."""
+    case = db.get(CaseORM, case_id)
+    if case is None:
+        raise _error(404, "CASE_NOT_FOUND", f"No case with id {case_id}")
+    ordered = sorted(case.trace_events, key=lambda t: t.sequence)
+    events = [
+        TraceEvent(
+            trace_id=t.trace_id,
+            case_id=t.case_id,
+            sequence=t.sequence,
+            stage=t.stage,
+            event_type=t.event_type,
+            tool_name=t.tool_name,
+            argument_hash=t.argument_hash,
+            result_hash=t.result_hash,
+            state_before_hash=t.state_before_hash,
+            state_after_hash=t.state_after_hash,
+            evidence_ids=t.evidence_ids,
+            timestamp=t.timestamp,
+        )
+        for t in ordered
+    ]
+    return {"case_id": case_id, "event_count": len(events), "chain_verified": verify_trace_chain(case_id, events)}
 
 
 @app.post("/api/cases/{case_id}/replay")

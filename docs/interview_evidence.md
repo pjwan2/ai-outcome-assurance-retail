@@ -21,8 +21,12 @@ No self-assessed seniority claims below — only what is runnable and where.
 | Wilson 95% lower bound on critical recall | `app/evaluation.py::wilson_lower_bound` | `pytest tests/test_evaluation_and_release_gate.py::test_wilson_lower_bound_is_below_observed_rate_for_small_n` |
 | REST API covering PRD §14 endpoints | `backend/app/api.py` | `pytest tests/test_api.py` |
 | Operator UI — 4 views | `frontend/src/App.tsx` | `npm run dev`, verified: `tsc --noEmit` clean, `npm run build` succeeds, dev server serves the app against a live backend |
+| `CaseStatus` state machine actually enforced, not just defined | `app/state_machine.py::validate_transition`, called from `run_case_pipeline` via `_TraceRecorder.transition` | `pytest tests/test_trace_chain.py::test_state_transitions_are_recorded_and_valid` |
+| `TraceEvent` SHA-256 hash chain (tamper/reorder detection) | `app/services/workflow.py::_TraceRecorder`, `verify_trace_chain()` | `pytest tests/test_trace_chain.py`, `GET /api/cases/{case_id}/trace/verify` |
+| Counter-evidence linked on contradictory claims | `app/services/workflow.py::_resolve` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
 | Ruff + mypy clean | — | `make lint`, `make typecheck` |
-| 30 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| 36 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| CI workflow defined (backend + frontend) | `.github/workflows/ci.yml` | Check the GitHub Actions tab after a push — **not yet confirmed to have run successfully on GitHub's infrastructure as of this commit** |
 
 ## DEMONSTRATED WITH SYNTHETIC FIXTURES
 
@@ -55,3 +59,7 @@ trace hash chaining.
 - No claim that R2 reproduces a specific "12/24" degraded-recall number — it does not, and the honest
   number is documented in `docs/evaluation.md`.
 - No claim of live OpenAI/Anthropic integration — none exists in this repository.
+- No claim that `docker compose up --build` has been run successfully — the Dockerfiles/compose file
+  exist and were reviewed, but the build was not executed (no Docker daemon in the dev sandbox).
+- No claim that CI has passed on GitHub's infrastructure — the workflow file exists; confirm the Actions
+  tab shows a green run before citing it.

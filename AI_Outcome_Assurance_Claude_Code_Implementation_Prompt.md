@@ -1,9 +1,7 @@
 # AI Outcome Assurance
 ## Claude Code Implementation Prompt — Runnable Public-Retail Vertical Slice
 
-> 将本文件放在项目根目录，然后把从“BEGIN PROMPT”到“END PROMPT”的内容交给 Claude Code。
->
-> 目标不是一次实现宏大的企业平台，而是完成一条可运行、可测试、可审查、可在面试中诚实演示的零售 AI Outcome Assurance 垂直切片。
+
 
 ---
 

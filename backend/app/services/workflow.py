@@ -9,6 +9,7 @@ reproducible.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,8 @@ from app.models import (
     TerminationStatus,
     TraceEvent,
 )
+from app.state_machine import CaseStatus, validate_transition
+from app.tools import validate_tool_call
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 RULE_VERSION = "rules-v2"
@@ -55,12 +58,22 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _sha256(payload: str) -> str:
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class _TraceRecorder:
-    """Accumulates ordered TraceEvent records for one case run."""
+    """Accumulates ordered TraceEvent records for one case run as a hash
+    chain: each event's `state_after_hash` folds in the previous event's
+    hash, its own content, and (for tool calls) an argument hash. Replaying
+    the same fixture through `verify_trace_chain` must reproduce the same
+    chain — any inserted, reordered, or edited event breaks it.
+    """
 
     def __init__(self, case_id: str) -> None:
         self.case_id = case_id
         self._sequence = 0
+        self._chain_hash = _sha256(f"CASE:{case_id}")
         self.events: list[TraceEvent] = []
 
     def record(
@@ -70,8 +83,26 @@ class _TraceRecorder:
         *,
         tool_name: str | None = None,
         evidence_ids: list[str] | None = None,
+        arguments: dict[str, Any] | None = None,
     ) -> None:
         self._sequence += 1
+        evidence_ids = evidence_ids or []
+        state_before_hash = self._chain_hash
+        argument_hash = _sha256(json.dumps(arguments, sort_keys=True)) if arguments is not None else None
+        result_payload = json.dumps(
+            {
+                "sequence": self._sequence,
+                "stage": stage,
+                "event_type": event_type,
+                "tool_name": tool_name,
+                "evidence_ids": evidence_ids,
+            },
+            sort_keys=True,
+        )
+        result_hash = _sha256(result_payload)
+        state_after_hash = _sha256(state_before_hash + result_hash + (argument_hash or ""))
+        self._chain_hash = state_after_hash
+
         self.events.append(
             TraceEvent(
                 trace_id=f"TRACE-{self.case_id}-{self._sequence:03d}",
@@ -80,14 +111,50 @@ class _TraceRecorder:
                 stage=stage,
                 event_type=event_type,
                 tool_name=tool_name,
-                argument_hash=None,
-                result_hash=None,
-                state_before_hash=None,
-                state_after_hash=None,
-                evidence_ids=evidence_ids or [],
+                argument_hash=argument_hash,
+                result_hash=result_hash,
+                state_before_hash=state_before_hash,
+                state_after_hash=state_after_hash,
+                evidence_ids=evidence_ids,
                 timestamp=_now(),
             )
         )
+
+    def transition(self, current: CaseStatus, target: CaseStatus) -> CaseStatus:
+        """Validate and record a CaseStatus transition. Fails closed:
+        raises InvalidTransitionError (not caught here) on an illegal
+        transition rather than recording it."""
+        validate_transition(current, target)
+        self.record("STATE", "STATE_TRANSITION", arguments={"from": current.value, "to": target.value})
+        return target
+
+
+def verify_trace_chain(case_id: str, events: list[TraceEvent]) -> bool:
+    """Recompute the hash chain for a stored/replayed trace and confirm it
+    matches what was recorded. Returns False if any event was altered,
+    reordered, inserted, or removed."""
+    chain_hash = _sha256(f"CASE:{case_id}")
+    for event in sorted(events, key=lambda e: e.sequence):
+        if event.state_before_hash != chain_hash:
+            return False
+        result_payload = json.dumps(
+            {
+                "sequence": event.sequence,
+                "stage": event.stage,
+                "event_type": event.event_type,
+                "tool_name": event.tool_name,
+                "evidence_ids": event.evidence_ids,
+            },
+            sort_keys=True,
+        )
+        expected_result_hash = _sha256(result_payload)
+        if event.result_hash != expected_result_hash:
+            return False
+        expected_state_after = _sha256(chain_hash + expected_result_hash + (event.argument_hash or ""))
+        if event.state_after_hash != expected_state_after:
+            return False
+        chain_hash = expected_state_after
+    return True
 
 
 def _investigate(
@@ -100,7 +167,11 @@ def _investigate(
     budget; exhausting it raises BudgetExceededError.
     """
     budget.consume_tool_call()
-    trace.record("INVESTIGATE", "CANDIDATE_SEARCH_STARTED", tool_name="fixture_lexical_search")
+    tool_args = {"case_id": case["case_id"], "query": None}
+    validate_tool_call("fixture_lexical_search", tool_args)
+    trace.record(
+        "INVESTIGATE", "CANDIDATE_SEARCH_STARTED", tool_name="fixture_lexical_search", arguments=tool_args
+    )
     candidates = [s for s in sources if s["source_id"] in case["source_refs"]]
     trace.record(
         "INVESTIGATE",
@@ -509,6 +580,8 @@ def run_case_pipeline(
 
     trace = _TraceRecorder(case["case_id"])
     trace.record("CASE", "CASE_CREATED")
+    case_status = CaseStatus.CREATED
+    case_status = trace.transition(case_status, CaseStatus.INVESTIGATING)
 
     try:
         candidates = _investigate(case, sources, trace, budget)
@@ -544,16 +617,25 @@ def run_case_pipeline(
         )
 
     snapshots, evidence = _validate(case, candidates, trace)
+    case_status = trace.transition(case_status, CaseStatus.EVIDENCE_VALIDATED)
+
     claims = _resolve(case, evidence, trace)
+    case_status = trace.transition(case_status, CaseStatus.CLAIMS_RESOLVED)
+
     authority = _authorise(case, claims, trace)
+    case_status = trace.transition(case_status, CaseStatus.AUTHORITY_EVALUATED)
+
     review = _create_review_task(case, authority, trace)
     outcome = _reconcile(case, authority, trace)
 
-    termination_status = (
-        TerminationStatus.NEEDS_REVIEW
-        if authority.decision == AuthorityDecision.REQUIRE_HUMAN
-        else TerminationStatus.COMPLETED
-    )
+    if review is not None:
+        case_status = trace.transition(case_status, CaseStatus.NEEDS_REVIEW)
+        termination_status = TerminationStatus.NEEDS_REVIEW
+    else:
+        case_status = trace.transition(case_status, CaseStatus.READY_TO_RECONCILE)
+        case_status = trace.transition(case_status, CaseStatus.COMPLETED)
+        termination_status = TerminationStatus.COMPLETED
+
     trace.record("RECONCILE", "CASE_TERMINATED")
 
     return CaseArtifacts(

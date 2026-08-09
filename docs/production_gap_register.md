@@ -16,8 +16,26 @@ mistaken for a production claim.
 | Production-scale vector infrastructure | Only fixture-backed lexical matching | No embeddings, no vector DB |
 | Live Anthropic/Google adapters | Not started | `app.tools`/pipeline interfaces are provider-neutral but no live adapter exists |
 | Live OpenAI adapter | Optional per PRD §13/§6, not implemented in this session | Offline deterministic path only |
-| CaseStatus state machine enforcement | Defined but not wired into persistence | `app/state_machine.py` (unit tested, not integrated) |
-| TraceEvent hash chaining | Schema fields exist, unpopulated | `argument_hash`/`result_hash`/etc. are `None` |
-| Containerisation | No Dockerfile/compose file | Local `python`/`npm` commands only |
-| CI/CD | Not a git repository yet | `make test`/`lint`/`typecheck` run locally |
-| Multi-case intake | Only the hero fixture is runnable via the API | `case_id` path params are accepted but ignored |
+| Multi-case intake | Only the hero fixture is runnable via the API | `case_id` path params are accepted but ignored — see `docs/limitations.md` |
+| Docker build verification | Dockerfiles/compose exist but were not built in this session (no Docker daemon available in the dev sandbox) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` — needs a real `docker compose up --build` run to confirm |
+| CI on real infrastructure | `.github/workflows/ci.yml` exists and runs backend tests/lint/typecheck/demo-smoke + frontend typecheck/build, but has not yet executed on GitHub's runners as of this commit | First push to `master` after this change will be the first real run — check the Actions tab |
+
+## Resolved since the previous version of this document
+
+These were listed as gaps before and are now implemented and tested — kept here so the history of
+what changed is visible, not silently dropped:
+
+- **CaseStatus state machine enforcement** — `run_case_pipeline` now steps through
+  `CREATED → INVESTIGATING → EVIDENCE_VALIDATED → CLAIMS_RESOLVED → AUTHORITY_EVALUATED → NEEDS_REVIEW`
+  or `→ READY_TO_RECONCILE → COMPLETED`, calling `app/state_machine.py::validate_transition` at each
+  step and recording a `STATE_TRANSITION` trace event. An illegal transition raises
+  `InvalidTransitionError` and is never recorded (`tests/test_trace_chain.py`).
+- **TraceEvent hash chaining** — every `TraceEvent` now carries real `argument_hash`, `result_hash`,
+  `state_before_hash`, `state_after_hash` values folded into a running SHA-256 chain
+  (`app/services/workflow.py::_TraceRecorder`). `verify_trace_chain()` recomputes and checks it;
+  tampering, reordering, or replaying the same fixture are all covered by
+  `tests/test_trace_chain.py`. Exposed via `GET /api/cases/{case_id}/trace/verify`.
+- **Containerisation** — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` added (see
+  the row above for the one remaining caveat: not yet build-verified in this session).
+- **CI/CD** — this is now a git repository with `.github/workflows/ci.yml` (see the row above for the
+  one remaining caveat: not yet run on GitHub's infrastructure as of this commit).

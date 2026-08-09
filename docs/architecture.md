@@ -45,11 +45,20 @@ unexpected arguments raise before anything runs. `app/budget.py::RunBudget` caps
 exhausting it produces `TerminationStatus.CONTROL_BLOCKED`, not an unhandled exception
 (`app/services/workflow.py::run_case_pipeline`).
 
-## State machine
+## State machine and trace hash chain
 
-`app/state_machine.py` defines the allowed `CaseStatus` transitions from PRD section 9. It is not yet
-wired into `run_case_pipeline`'s persisted `Case.status` column (that column is set directly to the
-terminal status today) — see `docs/production_gap_register.md`.
+`app/state_machine.py` defines the allowed `CaseStatus` transitions from PRD section 9.
+`run_case_pipeline` steps through them for real — `CREATED → INVESTIGATING → EVIDENCE_VALIDATED →
+CLAIMS_RESOLVED → AUTHORITY_EVALUATED → NEEDS_REVIEW` (or `→ READY_TO_RECONCILE → COMPLETED`) — calling
+`validate_transition` at each step via `_TraceRecorder.transition`. An illegal transition raises
+`InvalidTransitionError` before anything is recorded.
+
+Every `TraceEvent` also carries a real SHA-256 hash chain: `state_before_hash` is the prior event's
+`state_after_hash`, `result_hash` covers the event's own content, and `argument_hash` covers any tool
+arguments. `verify_trace_chain()` recomputes the chain from stored events and detects tampering,
+reordering, or missing events — exposed at `GET /api/cases/{case_id}/trace/verify`. Because nothing
+time-dependent is hashed, replaying the same fixture reproduces a byte-identical chain
+(`tests/test_trace_chain.py::test_replay_produces_byte_identical_hash_chain`).
 
 ## Evaluation and release gate
 

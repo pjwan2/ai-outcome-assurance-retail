@@ -18,19 +18,25 @@
   global table scan.
 - **Escaped UI rendering.** The frontend is React with no `dangerouslySetInnerHTML` anywhere — all
   retrieved/model-shaped content renders as text, not HTML.
-- **Log/trace minimisation.** `TraceEvent` stores hashes and IDs, not full request/response payloads
-  (the hash fields are currently unpopulated — see `docs/production_gap_register.md`).
+- **Log/trace minimisation.** `TraceEvent` stores hashes and IDs, not full request/response payloads —
+  and those hashes are now real, chained SHA-256 values (`app/services/workflow.py::_TraceRecorder`),
+  tamper-evident via `GET /api/cases/{case_id}/trace/verify` (`tests/test_trace_chain.py`).
 - **Static checks.** `make lint` (ruff) and `make typecheck` (mypy) are both clean
   (`ruff check app tests` → 0 issues; `mypy app` → 0 issues).
+- **CI on every push/PR.** `.github/workflows/ci.yml` runs backend tests/lint/typecheck/demo-smoke and
+  frontend typecheck/build — not yet confirmed green on GitHub's own runners as of this commit, see
+  `docs/production_gap_register.md`.
 
 ## Explicitly not implemented (proposed only)
 
 - No live network ingestion exists in this repository, so a URL allow-list, timeouts, size limits and
   content-type checks for "any optional ingestion command" (PRD §20) have no code to attach to yet.
   Fixtures are local, versioned JSON files only.
-- No dependency/SCA scanner is wired into CI (no CI pipeline exists in this repository at all — it is
-  not a git repository as of this writing).
+- No dependency/SCA scanner is wired into CI yet.
 - No authn/authz on the API — `reviewer_id` on `POST /api/reviews/{id}/decision` is a free-text field
   supplied by the caller, not verified against any identity system.
+- **CORS is wide open** (`allow_origins=["*"]` in `app/api.py`) to let the Vite dev server (different
+  port) call the API during local demos. Acceptable for an offline, same-machine, no-real-data demo;
+  must be scoped to a specific origin before any shared or hosted deployment.
 
 See `docs/production_gap_register.md` for the full list.
