@@ -17,8 +17,7 @@ mistaken for a production claim.
 | Live Anthropic/Google adapters | Not started | `app.tools`/pipeline interfaces are provider-neutral but no live adapter exists |
 | Live OpenAI adapter | Optional per PRD §13/§6, not implemented in this session | Offline deterministic path only |
 | Multi-case intake | Only the hero fixture is runnable via the API | `case_id` path params are accepted but ignored — see `docs/limitations.md` |
-| Docker build verification | Dockerfiles/compose exist but were not built in this session (no Docker daemon available in the dev sandbox) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` — needs a real `docker compose up --build` run to confirm |
-| CI on real infrastructure | `.github/workflows/ci.yml` exists and runs backend tests/lint/typecheck/demo-smoke + frontend typecheck/build, but has not yet executed on GitHub's runners as of this commit | First push to `master` after this change will be the first real run — check the Actions tab |
+| Docker build verification | Dockerfiles/compose exist and were reviewed, but `docker compose up --build` has not been run end-to-end (no Docker daemon in the dev sandbox that wrote them) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` — please confirm with a real build on your machine before relying on it |
 
 ## Resolved since the previous version of this document
 
@@ -36,6 +35,7 @@ what changed is visible, not silently dropped:
   tampering, reordering, or replaying the same fixture are all covered by
   `tests/test_trace_chain.py`. Exposed via `GET /api/cases/{case_id}/trace/verify`.
 - **Containerisation** — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` added (see
-  the row above for the one remaining caveat: not yet build-verified in this session).
-- **CI/CD** — this is now a git repository with `.github/workflows/ci.yml` (see the row above for the
-  one remaining caveat: not yet run on GitHub's infrastructure as of this commit).
+  the row above for the one remaining caveat: not yet build-verified end-to-end).
+- **CI/CD** — this is now a git repository with `.github/workflows/ci.yml`, confirmed green on GitHub
+  Actions: https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354 (backend and
+  frontend jobs both passed).

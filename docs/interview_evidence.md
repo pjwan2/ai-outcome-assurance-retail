@@ -26,7 +26,7 @@ No self-assessed seniority claims below — only what is runnable and where.
 | Counter-evidence linked on contradictory claims | `app/services/workflow.py::_resolve` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
 | Ruff + mypy clean | — | `make lint`, `make typecheck` |
 | 36 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
-| CI workflow defined (backend + frontend) | `.github/workflows/ci.yml` | Check the GitHub Actions tab after a push — **not yet confirmed to have run successfully on GitHub's infrastructure as of this commit** |
+| CI passing on GitHub Actions (backend + frontend) | `.github/workflows/ci.yml` | https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354 — both jobs green |
 
 ## DEMONSTRATED WITH SYNTHETIC FIXTURES
 
@@ -61,5 +61,3 @@ trace hash chaining.
 - No claim of live OpenAI/Anthropic integration — none exists in this repository.
 - No claim that `docker compose up --build` has been run successfully — the Dockerfiles/compose file
   exist and were reviewed, but the build was not executed (no Docker daemon in the dev sandbox).
-- No claim that CI has passed on GitHub's infrastructure — the workflow file exists; confirm the Actions
-  tab shows a green run before citing it.

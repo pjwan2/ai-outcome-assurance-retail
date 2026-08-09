@@ -24,8 +24,8 @@
 - **Static checks.** `make lint` (ruff) and `make typecheck` (mypy) are both clean
   (`ruff check app tests` → 0 issues; `mypy app` → 0 issues).
 - **CI on every push/PR.** `.github/workflows/ci.yml` runs backend tests/lint/typecheck/demo-smoke and
-  frontend typecheck/build — not yet confirmed green on GitHub's own runners as of this commit, see
-  `docs/production_gap_register.md`.
+  frontend typecheck/build, confirmed green on GitHub Actions:
+  https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354
 
 ## Explicitly not implemented (proposed only)
 

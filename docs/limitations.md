@@ -20,9 +20,6 @@ This is an interview-grade vertical slice, not a production system. Specifically
   `docker-compose.yml` exist, but they were written and reviewed without a working Docker daemon in the
   development sandbox — `docker compose up --build` has not actually been run. Verify before relying on
   it.
-- **CI not yet run on real infrastructure.** `.github/workflows/ci.yml` exists (backend
-  test/lint/typecheck/demo-smoke, frontend typecheck/build) but has not executed on GitHub's runners as
-  of this commit — check the Actions tab after the next push.
 - **CORS is wide open (`allow_origins=["*"]`).** Fine for a same-machine offline demo with no real user
   data; would need to be scoped to a specific origin before any shared/hosted deployment.
 
