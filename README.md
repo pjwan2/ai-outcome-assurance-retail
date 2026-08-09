@@ -16,7 +16,7 @@ enterprise safety. All orders/sellers/customers/products/reviewers are synthetic
 ```bash
 make setup
 make migrate
-make test        # 36 tests
+make test        # 39 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON
@@ -30,8 +30,7 @@ cd backend && python run_server.py     # http://127.0.0.1:8000
 cd frontend && npm run dev             # http://localhost:5173
 ```
 
-Or with Docker (Dockerfiles/compose are written but not build-verified in this repo's own CI sandbox —
-please confirm on your machine):
+Or with Docker (build- and run-verified — see `docs/security.md`):
 
 ```bash
 docker compose up --build              # backend :8000, frontend :5173
@@ -39,6 +38,10 @@ docker compose up --build              # backend :8000, frontend :5173
 
 No API key is required anywhere in this repository — the only investigation planner implemented is
 deterministic and offline.
+
+Mutating endpoints (create/run/replay a case, decide a review) require a bearer token — see
+[`app/auth.py`](backend/app/auth.py). The UI and a zero-config local run both fall back to a default
+dev token automatically; set `API_TOKENS` in `.env` for anything beyond a solo local demo.
 
 ## What's here
 
@@ -54,8 +57,15 @@ deterministic and offline.
 - **16 adversarial tests** (wrong seller/order, stale source, hash mismatch, missing locator, prompt
   injection, contradiction, budget exhaustion, invalid state transition, idempotent review decisions,
   outcome mismatch, blocked auto-refund — `backend/tests/test_adversarial.py`).
+- **Four runnable cases** (`GET /api/case-fixtures`): the hero case, a confirmed-major-failure
+  escalation, a resolved-minor-fault negative control, and a wrong-seller-binding case
+  (`backend/app/fixtures/cases/`).
+- **Bearer-token auth + role-checked reviews** on every mutating endpoint (`app/auth.py`) — demo-grade,
+  not enterprise IAM, see `docs/production_gap_register.md`.
 - **REST API** (`backend/app/api.py`) and a **4-view operator UI** (`frontend/src/App.tsx`): Case
-  Overview, Evidence & Claims, Review Queue, Trace & Release.
+  Overview, Evidence & Claims, Review Queue, Trace & Release, with a case-fixture picker.
+- **Containerised**: `docker-compose.yml` runs the backend (auto-migrating on boot) and an
+  nginx-served frontend build.
 
 Full docs: [`docs/architecture.md`](docs/architecture.md) ·
 [`docs/demo_runbook.md`](docs/demo_runbook.md) ·

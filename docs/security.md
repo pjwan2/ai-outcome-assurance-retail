@@ -26,6 +26,17 @@
 - **CI on every push/PR.** `.github/workflows/ci.yml` runs backend tests/lint/typecheck/demo-smoke and
   frontend typecheck/build, confirmed green on GitHub Actions:
   https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354
+- **Bearer-token authn/authz on mutating endpoints.** `app/auth.py::require_auth` gates
+  `POST /api/cases`, `POST /api/cases/{id}/run`, `POST /api/cases/{id}/replay`, and
+  `POST /api/reviews/{id}/decision` — missing/invalid tokens get `401`. Review decisions derive
+  `reviewer_id` from the authenticated token (never a client-supplied field) and check the token's role
+  against `ReviewTask.assigned_role`, returning `403 ROLE_NOT_PERMITTED` on mismatch
+  (`tests/test_api.py::test_create_case_requires_auth`,
+  `::test_wrong_role_cannot_decide_review`). This is a static token map, not enterprise IAM — see
+  `docs/production_gap_register.md`.
+- **Docker build verified end-to-end.** `docker compose build` succeeded for both images;
+  `docker compose up` started both containers, the backend ran its Alembic migration on boot, and
+  `POST /api/cases` / `GET /api/cases/{id}/trace/verify` were exercised against the running container.
 
 ## Explicitly not implemented (proposed only)
 
@@ -33,8 +44,6 @@
   content-type checks for "any optional ingestion command" (PRD §20) have no code to attach to yet.
   Fixtures are local, versioned JSON files only.
 - No dependency/SCA scanner is wired into CI yet.
-- No authn/authz on the API — `reviewer_id` on `POST /api/reviews/{id}/decision` is a free-text field
-  supplied by the caller, not verified against any identity system.
 - **CORS is wide open** (`allow_origins=["*"]` in `app/api.py`) to let the Vite dev server (different
   port) call the API during local demos. Acceptable for an offline, same-machine, no-real-data demo;
   must be scoped to a specific origin before any shared or hosted deployment.

@@ -1,0 +1,59 @@
+{
+  "case": {
+    "case_id": "CASE-RET-002",
+    "order_ref": "ORD-1002",
+    "seller_ref": "SELLER-901",
+    "product_ref": "PROD-LAPTOP-02",
+    "risk_band": "high",
+    "as_of": "2026-08-07T00:00:00Z",
+    "source_refs": ["SRC-KOGAN-GUARANTEE", "SRC-ACCC-RIGHTS", "SRC-FAULT-MAJOR"],
+    "event": {
+      "delivery_date": "2026-05-10",
+      "failure_start_date": "2026-06-02",
+      "seller_response": "Please contact the manufacturer."
+    },
+    "customer_request": "refund"
+  },
+  "sources": [
+    {
+      "source_id": "SRC-KOGAN-GUARANTEE",
+      "url": "https://www.kogan.com/au/guarantee/",
+      "title": "Kogan Guarantee",
+      "source_class": "retailer_policy",
+      "retrieved_at": "2026-08-07T00:00:00Z",
+      "effective_at": "2026-08-07",
+      "content_hash": "sha256:synthetic-kogan-guarantee",
+      "version": "v1",
+      "allowed_for_evidence": true,
+      "excerpt": "Marketplace retailers may offer refunds or replacements beyond statutory rights.",
+      "excerpt_kind": "paraphrase"
+    },
+    {
+      "source_id": "SRC-ACCC-RIGHTS",
+      "url": "https://www.accc.gov.au/consumers/buying-products-and-services/consumer-rights-and-guarantees",
+      "title": "Consumer rights and guarantees",
+      "source_class": "accc_guidance",
+      "retrieved_at": "2026-08-07T00:00:00Z",
+      "effective_at": "2026-08-07",
+      "content_hash": "sha256:synthetic-accc-rights",
+      "version": "v1",
+      "allowed_for_evidence": true,
+      "excerpt": "Consumers can seek remedies, but entitlement depends on the facts and applicable policy.",
+      "excerpt_kind": "paraphrase"
+    },
+    {
+      "source_id": "SRC-FAULT-MAJOR",
+      "url": "https://example.test/synthetic-fault-report-major",
+      "title": "Synthetic technician fault report",
+      "source_class": "fault_assessment",
+      "retrieved_at": "2026-08-07T00:00:00Z",
+      "effective_at": "2026-06-05",
+      "content_hash": "sha256:synthetic-fault-major-002",
+      "version": "v1",
+      "allowed_for_evidence": true,
+      "fault_conclusion": "major",
+      "excerpt": "Technician assessment confirms major failure: motherboard does not power on after 3 weeks of use.",
+      "excerpt_kind": "paraphrase"
+    }
+  ]
+}

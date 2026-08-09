@@ -201,7 +201,6 @@ function ReviewQueue({ reviews, onDecided }: { reviews: ReviewTask[]; onDecided:
     setBusy(review.review_id);
     try {
       await api.decideReview(review.review_id, {
-        reviewer_id: "demo-reviewer",
         decision,
         notes: "Decided from operator UI demo.",
         idempotency_key: `${review.review_id}-${decision}-${Date.now()}`,
@@ -260,18 +259,27 @@ function ReviewQueue({ reviews, onDecided }: { reviews: ReviewTask[]; onDecided:
 
 function TraceAndRelease({
   trace,
+  traceVerified,
   release,
   onRunRelease,
   loadingRelease,
 }: {
   trace: TraceEvent[];
+  traceVerified: boolean | null;
   release: ReleaseResult | null;
   onRunRelease: () => void;
   loadingRelease: boolean;
 }) {
   return (
     <div>
-      <Card title="Ordered state transitions and tool calls" hint={`${trace.length} events`}>
+      <Card
+        title="Ordered state transitions and tool calls"
+        hint={
+          traceVerified === null
+            ? `${trace.length} events`
+            : `${trace.length} events · hash chain ${traceVerified ? "verified" : "INVALID"}`
+        }
+      >
         <table className="data-table">
           <thead>
             <tr>
@@ -279,6 +287,7 @@ function TraceAndRelease({
               <th>Stage</th>
               <th>Event</th>
               <th>Tool</th>
+              <th>Chain hash</th>
             </tr>
           </thead>
           <tbody>
@@ -288,6 +297,7 @@ function TraceAndRelease({
                 <td>{t.stage}</td>
                 <td>{t.event_type}</td>
                 <td className="muted">{t.tool_name ?? "—"}</td>
+                <td className="mono muted">{t.state_after_hash ? t.state_after_hash.slice(0, 10) : "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -391,38 +401,47 @@ export default function App() {
   const [loadingRelease, setLoadingRelease] = React.useState(false);
   const [creatingCase, setCreatingCase] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [caseFixtures, setCaseFixtures] = React.useState<string[]>([]);
+  const [selectedFixture, setSelectedFixture] = React.useState("CASE-RET-001");
+  const [traceVerified, setTraceVerified] = React.useState<boolean | null>(null);
 
   const loadCaseData = React.useCallback(async (caseId: string) => {
-    const [claimsData, evidenceData, authorityData, traceData, reviewsData] = await Promise.all([
+    const [claimsData, evidenceData, authorityData, traceData, reviewsData, verifyData] = await Promise.all([
       api.getClaims(caseId),
       api.getEvidence(caseId),
       api.getAuthority(caseId),
       api.getTrace(caseId),
       api.listReviews(),
+      api.verifyTrace(caseId),
     ]);
     setClaims(claimsData);
     setEvidence(evidenceData);
     setAuthority(authorityData);
     setTrace(traceData);
     setReviews(reviewsData);
+    setTraceVerified(verifyData.chain_verified);
   }, []);
 
-  const runNewCase = React.useCallback(async () => {
-    setCreatingCase(true);
-    setError(null);
-    try {
-      const created = await api.createCase();
-      setCaseSummary(created);
-      await loadCaseData(created.case_id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setCreatingCase(false);
-    }
-  }, [loadCaseData]);
+  const runNewCase = React.useCallback(
+    async (caseId?: string) => {
+      setCreatingCase(true);
+      setError(null);
+      try {
+        const created = await api.createCase(caseId ?? selectedFixture);
+        setCaseSummary(created);
+        await loadCaseData(created.case_id);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setCreatingCase(false);
+      }
+    },
+    [loadCaseData, selectedFixture],
+  );
 
   React.useEffect(() => {
-    runNewCase();
+    api.listCaseFixtures().then((r) => setCaseFixtures(r.case_ids)).catch(() => setCaseFixtures(["CASE-RET-001"]));
+    runNewCase("CASE-RET-001");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -458,12 +477,31 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <button className="btn btn-primary" style={{ margin: "16px 4px 0", width: "calc(100% - 8px)" }} onClick={runNewCase} disabled={creatingCase}>
-          {creatingCase ? "Running…" : "Run new case"}
+        <div className="sidebar-hint" style={{ padding: "16px 4px 4px" }}>
+          Fixture case
+        </div>
+        <select
+          className="case-select"
+          value={selectedFixture}
+          onChange={(e) => setSelectedFixture(e.target.value)}
+        >
+          {caseFixtures.map((id) => (
+            <option key={id} value={id}>
+              {id}
+            </option>
+          ))}
+        </select>
+        <button
+          className="btn btn-primary"
+          style={{ margin: "10px 4px 0", width: "calc(100% - 8px)" }}
+          onClick={() => runNewCase(selectedFixture)}
+          disabled={creatingCase}
+        >
+          {creatingCase ? "Running…" : "Run selected case"}
         </button>
         <p className="sidebar-hint">
-          Re-runs the deterministic pipeline on the same hero fixture and opens a fresh, undecided
-          review task so you can try the Review Queue actions again.
+          Runs the deterministic pipeline on the selected fixture and opens a fresh, undecided review
+          task (when one is required) so you can try the Review Queue actions again.
         </p>
         <div className="sidebar-footer">
           Independent public-retail prototype.
@@ -487,7 +525,13 @@ export default function App() {
           <ReviewQueue reviews={reviews} onDecided={() => caseSummary && loadCaseData(caseSummary.case_id)} />
         )}
         {tab === "Trace & Release" && (
-          <TraceAndRelease trace={trace} release={release} onRunRelease={runReleaseGate} loadingRelease={loadingRelease} />
+          <TraceAndRelease
+            trace={trace}
+            traceVerified={traceVerified}
+            release={release}
+            onRunRelease={runReleaseGate}
+            loadingRelease={loadingRelease}
+          />
         )}
       </main>
     </div>

@@ -5,7 +5,7 @@ mistaken for a production claim.
 
 | Gap | Why it matters | What exists today |
 |---|---|---|
-| Enterprise IAM / access control | API has no authn/authz | `reviewer_id` is a free-text field |
+| Enterprise IAM / access control | `app/auth.py` is a static bearer-token-to-role map (`API_TOKENS` env var), not OAuth/OIDC/SSO, no token expiry or revocation, no audit log of auth events | Real authn/authz boundary exists and is enforced (401/403 tested), but it is demo-grade, not enterprise IAM |
 | Production data classification & retention | No PII/retention policy engine | Only synthetic fixtures exist |
 | Distributed queues / distributed tracing | Single-process, synchronous pipeline | In-process `_TraceRecorder`, SQLite |
 | Real retailer/order/CRM integration | No external system calls anywhere | Local JSON fixtures only |
@@ -16,9 +16,6 @@ mistaken for a production claim.
 | Production-scale vector infrastructure | Only fixture-backed lexical matching | No embeddings, no vector DB |
 | Live Anthropic/Google adapters | Not started | `app.tools`/pipeline interfaces are provider-neutral but no live adapter exists |
 | Live OpenAI adapter | Optional per PRD §13/§6, not implemented in this session | Offline deterministic path only |
-| Multi-case intake | Only the hero fixture is runnable via the API | `case_id` path params are accepted but ignored — see `docs/limitations.md` |
-| Docker build verification | Dockerfiles/compose exist and were reviewed, but `docker compose up --build` has not been run end-to-end (no Docker daemon in the dev sandbox that wrote them) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` — please confirm with a real build on your machine before relying on it |
-
 ## Resolved since the previous version of this document
 
 These were listed as gaps before and are now implemented and tested — kept here so the history of
@@ -34,8 +31,22 @@ what changed is visible, not silently dropped:
   (`app/services/workflow.py::_TraceRecorder`). `verify_trace_chain()` recomputes and checks it;
   tampering, reordering, or replaying the same fixture are all covered by
   `tests/test_trace_chain.py`. Exposed via `GET /api/cases/{case_id}/trace/verify`.
-- **Containerisation** — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` added (see
-  the row above for the one remaining caveat: not yet build-verified end-to-end).
+- **Containerisation** — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` added and
+  **build-verified end-to-end**: `docker compose build` succeeded for both images, `docker compose up`
+  started both containers, the backend ran its Alembic migration on boot, and
+  `POST /api/cases` / `GET /api/cases/{id}/trace/verify` were exercised against the running backend
+  container. The frontend container (nginx) served the built SPA.
 - **CI/CD** — this is now a git repository with `.github/workflows/ci.yml`, confirmed green on GitHub
   Actions: https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354 (backend and
   frontend jobs both passed).
+- **Multi-case intake** — four runnable fixture cases now exist (`CASE-RET-001` through `-004`),
+  covering the hero case, a confirmed-major-failure escalation, a resolved-minor-fault negative
+  control, and a wrong-seller-binding case. `GET /api/case-fixtures` lists them;
+  `POST /api/cases {"case_id": "..."}` runs any of them — the `case_id` is no longer ignored.
+  Still not free-text intake: every case is one of these versioned fixtures
+  (`backend/scripts/generate_eval_dataset.py`-style reproducibility, not a live intake form).
+- **Basic authn/authz** — `app/auth.py` requires a bearer token on every mutating endpoint (create
+  case, run/replay case, decide review). Review decisions derive `reviewer_id` from the authenticated
+  token, not a client-supplied field, and check the token's role against the review's
+  `assigned_role` (403 on mismatch). See the IAM row above for what this is *not* — it is not
+  enterprise IAM.

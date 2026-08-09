@@ -54,6 +54,31 @@ def _valid_bindings() -> list[dict[str, str]]:
     return _load_fixture("case_registry.json")["valid_bindings"]
 
 
+class UnknownCaseError(Exception):
+    def __init__(self, case_id: str) -> None:
+        self.case_id = case_id
+        super().__init__(f"No runnable fixture for case_id '{case_id}'")
+
+
+def list_available_case_ids() -> list[str]:
+    """Case IDs with a runnable fixture, in a stable, deterministic order."""
+    extra_ids = sorted(p.stem for p in (FIXTURES_DIR / "cases").glob("*.json"))
+    return ["CASE-RET-001", *extra_ids]
+
+
+def load_case_fixture(case_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load the (case, sources) fixture pair for a given case_id from the
+    versioned fixture registry. Raises UnknownCaseError for anything not in
+    `list_available_case_ids()` — there is no free-text case intake."""
+    if case_id == "CASE-RET-001":
+        return _load_fixture("synthetic_case.json"), _load_fixture("source_manifest.json")["sources"]
+    path = FIXTURES_DIR / "cases" / f"{case_id}.json"
+    if not path.exists():
+        raise UnknownCaseError(case_id)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data["case"], data["sources"]
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -560,19 +585,24 @@ def run_case_pipeline(
     case: dict[str, Any] | None = None,
     sources: list[dict[str, Any]] | None = None,
     budget: RunBudget | None = None,
+    case_id: str | None = None,
 ) -> CaseArtifacts:
     """Run the deterministic pipeline end to end and return the raw typed
     artifacts (case, evidence, claims, authority, review, outcome, trace).
 
-    Defaults to the hero-case fixtures. Pass `case`/`sources` explicitly to
-    run the same rules against another fixture, e.g. an evaluation or
-    adversarial-test case. Use `run_case_workflow` for a JSON-serialisable
-    summary of the default hero case, or `app.persistence.persist_case_run`
-    to write artifacts to the database. If `budget` is exhausted, the run
-    terminates with TerminationStatus.CONTROL_BLOCKED rather than raising —
-    a stopped workflow is a valid controlled outcome."""
+    Defaults to the hero-case fixture (CASE-RET-001). Pass `case_id` to run
+    any other fixture from `list_available_case_ids()`, or pass `case`/
+    `sources` explicitly to run the rules against an ad hoc fixture, e.g. an
+    evaluation or adversarial-test case. Use `run_case_workflow` for a
+    JSON-serialisable summary of the default hero case, or
+    `app.persistence.persist_case_run` to write artifacts to the database.
+    If `budget` is exhausted, the run terminates with
+    TerminationStatus.CONTROL_BLOCKED rather than raising — a stopped
+    workflow is a valid controlled outcome."""
     if case is None:
-        case = _load_fixture("synthetic_case.json")
+        case, loaded_sources = load_case_fixture(case_id or "CASE-RET-001")
+        if sources is None:
+            sources = loaded_sources
     if sources is None:
         sources = _load_fixture("source_manifest.json")["sources"]
     if budget is None:

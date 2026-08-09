@@ -71,4 +71,22 @@ evaluation output — see `docs/evaluation.md` and `docs/release_gate.md`.
 
 FastAPI app in `backend/app/api.py` implements the endpoints in PRD section 14. The React/TypeScript
 UI in `frontend/src/App.tsx` implements the four operator views (Case Overview, Evidence & Claims,
-Review Queue, Trace & Release) as tabs in a single page, calling the API directly.
+Review Queue, Trace & Release) as tabs in a single page, calling the API directly. A case-fixture
+picker in the sidebar lets the operator choose which of the four runnable cases to run.
+
+## Multi-case fixtures
+
+`app/services/workflow.py::load_case_fixture(case_id)` resolves a case_id against
+`list_available_case_ids()` (`CASE-RET-001` plus every `*.json` under
+`backend/app/fixtures/cases/`) and raises `UnknownCaseError` for anything else — there is still no
+free-text case intake, only a larger versioned set of fixtures. `GET /api/case-fixtures` exposes the
+list; `POST /api/cases {"case_id": ...}` runs any of them.
+
+## Auth boundary
+
+`app/auth.py::require_auth` is a FastAPI dependency gating every mutating endpoint. It resolves a
+bearer token to a `Principal(reviewer_id, role)` via a static `API_TOKENS` env-var map (or a single
+default dev token if unset). `POST /api/reviews/{id}/decision` uses the principal's `reviewer_id`
+instead of a client-supplied field, and rejects a role that doesn't match `ReviewTask.assigned_role`
+with `403 ROLE_NOT_PERMITTED`. This is a real, tested authz boundary — not enterprise IAM (no OAuth,
+no token expiry) — see `docs/production_gap_register.md`.

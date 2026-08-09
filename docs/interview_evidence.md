@@ -25,8 +25,11 @@ No self-assessed seniority claims below — only what is runnable and where.
 | `TraceEvent` SHA-256 hash chain (tamper/reorder detection) | `app/services/workflow.py::_TraceRecorder`, `verify_trace_chain()` | `pytest tests/test_trace_chain.py`, `GET /api/cases/{case_id}/trace/verify` |
 | Counter-evidence linked on contradictory claims | `app/services/workflow.py::_resolve` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
 | Ruff + mypy clean | — | `make lint`, `make typecheck` |
-| 36 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| 39 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
 | CI passing on GitHub Actions (backend + frontend) | `.github/workflows/ci.yml` | https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354 — both jobs green |
+| Four runnable fixture cases, `case_id` actually respected | `app/fixtures/cases/CASE-RET-00{2,3,4}.json`, `app/services/workflow.py::load_case_fixture` | `pytest tests/test_api.py::test_list_case_fixtures_and_run_a_non_hero_case` |
+| Bearer-token auth + role-checked review decisions | `app/auth.py::require_auth`, `app/api.py::post_review_decision` | `pytest tests/test_api.py::test_create_case_requires_auth`, `::test_wrong_role_cannot_decide_review` |
+| Docker build + run verified end-to-end (not just written) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` | `docker compose up --build`, then `curl localhost:8000/health` |
 
 ## DEMONSTRATED WITH SYNTHETIC FIXTURES
 

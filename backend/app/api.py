@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth import Principal, require_auth
 from app.db import Base, SessionLocal, engine
 from app.evaluation import run_evaluation
 from app.models import TraceEvent
@@ -21,7 +22,12 @@ from app.persistence import (
 )
 from app.release_gate import run_regression_release_gate, run_release_gate
 from app.reviews import ReviewAlreadyDecidedError, decide_review
-from app.services.workflow import run_case_pipeline, run_case_workflow, verify_trace_chain
+from app.services.workflow import (
+    list_available_case_ids,
+    run_case_pipeline,
+    run_case_workflow,
+    verify_trace_chain,
+)
 
 
 @asynccontextmanager
@@ -96,12 +102,28 @@ def _case_to_dict(case: CaseORM) -> dict:
     }
 
 
+class CreateCaseRequest(BaseModel):
+    case_id: str = "CASE-RET-001"
+
+
+@app.get("/api/case-fixtures")
+def list_case_fixtures() -> dict:
+    """Case IDs with a runnable, versioned fixture. There is no free-text
+    case intake in this prototype — every case is one of these."""
+    return {"case_ids": list_available_case_ids()}
+
+
 @app.post("/api/cases", status_code=201)
-def create_case_from_hero_fixture(db: Session = Depends(get_db)) -> dict:
-    """Runs the deterministic pipeline (currently the synthetic hero-case
-    fixture) and persists the resulting case. There is no free-text case
-    intake in this prototype — every case is a versioned fixture."""
-    artifacts = run_case_pipeline()
+def create_case(
+    body: CreateCaseRequest = CreateCaseRequest(),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Runs the deterministic pipeline for the requested fixture case_id
+    (default the hero case) and persists the resulting case."""
+    if body.case_id not in list_available_case_ids():
+        raise _error(404, "CASE_FIXTURE_NOT_FOUND", f"No runnable fixture for case_id {body.case_id}")
+    artifacts = run_case_pipeline(case_id=body.case_id)
     case_row = persist_case_run(db, artifacts)
     return _case_to_dict(case_row)
 
@@ -115,8 +137,12 @@ def get_case(case_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @app.post("/api/cases/{case_id}/run")
-def run_and_persist_case(case_id: str, db: Session = Depends(get_db)) -> dict:
-    artifacts = run_case_pipeline()
+def run_and_persist_case(
+    case_id: str, db: Session = Depends(get_db), principal: Principal = Depends(require_auth)
+) -> dict:
+    if case_id not in list_available_case_ids():
+        raise _error(404, "CASE_FIXTURE_NOT_FOUND", f"No runnable fixture for case_id {case_id}")
+    artifacts = run_case_pipeline(case_id=case_id)
     case_row = persist_case_run(db, artifacts)
     return _case_to_dict(case_row)
 
@@ -230,7 +256,9 @@ def verify_case_trace(case_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @app.post("/api/cases/{case_id}/replay")
-def replay_case(case_id: str, db: Session = Depends(get_db)) -> dict:
+def replay_case(
+    case_id: str, db: Session = Depends(get_db), principal: Principal = Depends(require_auth)
+) -> dict:
     """Re-run the deterministic pipeline for this case from the same
     versioned fixtures and persist the replayed artifacts. Because the
     pipeline is deterministic, the replayed claims/authority decision must
@@ -238,7 +266,7 @@ def replay_case(case_id: str, db: Session = Depends(get_db)) -> dict:
     case = db.get(CaseORM, case_id)
     if case is None:
         raise _error(404, "CASE_NOT_FOUND", f"No case with id {case_id}")
-    artifacts = run_case_pipeline()
+    artifacts = run_case_pipeline(case_id=case_id)
     case_row = persist_case_run(db, artifacts)
     return _case_to_dict(case_row)
 
@@ -273,19 +301,33 @@ def get_review(review_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 class ReviewDecisionRequest(BaseModel):
-    reviewer_id: str
     decision: str
     notes: str | None = None
     idempotency_key: str
 
 
 @app.post("/api/reviews/{review_id}/decision")
-def post_review_decision(review_id: str, body: ReviewDecisionRequest, db: Session = Depends(get_db)) -> dict:
+def post_review_decision(
+    review_id: str,
+    body: ReviewDecisionRequest,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Reviewer identity comes from the authenticated bearer token, never
+    from a client-supplied field — a caller cannot decide a review as
+    someone else. The caller's role must also match the review's
+    assigned_role."""
     review = db.get(ReviewTaskORM, review_id)
     if review is None:
         raise _error(404, "REVIEW_NOT_FOUND", f"No review with id {review_id}")
+    if principal.role != review.assigned_role:
+        raise _error(
+            403,
+            "ROLE_NOT_PERMITTED",
+            f"Role '{principal.role}' cannot decide a review assigned to '{review.assigned_role}'",
+        )
     try:
-        decide_review(review, body.reviewer_id, body.decision, body.notes, body.idempotency_key)
+        decide_review(review, principal.reviewer_id, body.decision, body.notes, body.idempotency_key)
     except ReviewAlreadyDecidedError as exc:
         raise _error(409, "REVIEW_ALREADY_DECIDED", str(exc)) from exc
     db.commit()

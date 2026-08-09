@@ -1,8 +1,16 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
+// Demo-only bearer token — see backend/app/auth.py. Matches the
+// zero-config default dev token so the UI works out of the box; a real
+// deployment would authenticate the operator and never hardcode this.
+const DEMO_AUTH_TOKEN = import.meta.env.VITE_API_TOKEN ?? "dev-local-demo-token";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${DEMO_AUTH_TOKEN}`,
+    },
     ...init,
   });
   if (!res.ok) {
@@ -61,7 +69,17 @@ export interface TraceEvent {
   event_type: string;
   tool_name: string | null;
   evidence_ids: string[];
+  argument_hash: string | null;
+  result_hash: string | null;
+  state_before_hash: string | null;
+  state_after_hash: string | null;
   timestamp: string | null;
+}
+
+export interface TraceVerifyResult {
+  case_id: string;
+  event_count: number;
+  chain_verified: boolean;
 }
 
 export interface ReviewTask {
@@ -92,15 +110,21 @@ export interface ReleaseResult {
 }
 
 export const api = {
-  createCase: () => request<CaseSummary>("/api/cases", { method: "POST" }),
+  listCaseFixtures: () => request<{ case_ids: string[] }>("/api/case-fixtures"),
+  createCase: (caseId?: string) =>
+    request<CaseSummary>("/api/cases", {
+      method: "POST",
+      body: JSON.stringify(caseId ? { case_id: caseId } : {}),
+    }),
   getCase: (caseId: string) => request<CaseSummary>(`/api/cases/${caseId}`),
   getClaims: (caseId: string) => request<Claim[]>(`/api/cases/${caseId}/claims`),
   getEvidence: (caseId: string) => request<Evidence[]>(`/api/cases/${caseId}/evidence`),
   getAuthority: (caseId: string) => request<AuthorityRecord[]>(`/api/cases/${caseId}/authority`),
   getTrace: (caseId: string) => request<TraceEvent[]>(`/api/cases/${caseId}/trace`),
+  verifyTrace: (caseId: string) => request<TraceVerifyResult>(`/api/cases/${caseId}/trace/verify`),
   replayCase: (caseId: string) => request<CaseSummary>(`/api/cases/${caseId}/replay`, { method: "POST" }),
   listReviews: () => request<ReviewTask[]>("/api/reviews"),
-  decideReview: (reviewId: string, body: { reviewer_id: string; decision: string; notes?: string; idempotency_key: string }) =>
+  decideReview: (reviewId: string, body: { decision: string; notes?: string; idempotency_key: string }) =>
     request<ReviewTask>(`/api/reviews/${reviewId}/decision`, { method: "POST", body: JSON.stringify(body) }),
   getLatestRelease: () => request<ReleaseResult>("/api/releases/latest"),
 };
