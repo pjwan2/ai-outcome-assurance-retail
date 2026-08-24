@@ -139,9 +139,53 @@ def test_evaluation_and_release_endpoints(client):
 
     fetched = client.get(f"/api/evaluations/{body['evaluation_id']}")
     assert fetched.status_code == 200
-    assert fetched.json()["dataset_version"] == body["dataset_version"]
+    fetched_body = fetched.json()
+    assert fetched_body["dataset_version"] == body["dataset_version"]
+    assert fetched_body["environment"] == "dev"
+    assert set(fetched_body["per_agent_slice"].keys()) == {
+        "AGENT-SUPERVISOR-V1",
+        "AGENT-RETRIEVAL-V1",
+        "AGENT-CRITIC-V1",
+    }
 
     release = client.get("/api/releases/latest")
     assert release.status_code == 200
     assert release.json()["decision"] == "PASS"
     assert release.json()["regression_fixture_check"]["decision"] == "BLOCK"
+    assert set(release.json()["agent_definition_ids"]) == {
+        "AGENT-SUPERVISOR-V1",
+        "AGENT-RETRIEVAL-V1",
+        "AGENT-CRITIC-V1",
+    }
+
+
+def test_agent_definitions_and_agent_runs_endpoints(client):
+    definitions = client.get("/api/agent-definitions").json()
+    assert {d["agent_id"] for d in definitions} == {
+        "AGENT-SUPERVISOR-V1",
+        "AGENT-RETRIEVAL-V1",
+        "AGENT-CRITIC-V1",
+    }
+    assert all(d["provider"] == "DETERMINISTIC" for d in definitions)
+
+    created = client.post("/api/cases", headers=AUTH_HEADERS).json()
+    case_id = created["case_id"]
+
+    runs = client.get(f"/api/cases/{case_id}/agent-runs").json()
+    assert len(runs) == 3
+    by_agent = {r["agent_id"]: r for r in runs}
+    supervisor = by_agent["AGENT-SUPERVISOR-V1"]
+    retrieval = by_agent["AGENT-RETRIEVAL-V1"]
+    critic = by_agent["AGENT-CRITIC-V1"]
+
+    assert supervisor["parent_run_id"] is None
+    assert retrieval["parent_run_id"] == supervisor["agent_run_id"]
+    assert critic["parent_run_id"] == supervisor["agent_run_id"]
+    assert all(r["stage"] == "INVESTIGATE" for r in runs)
+    assert all(r["termination_status"] == "COMPLETED" for r in runs)
+    assert len(retrieval["steps"]) == 1
+    assert retrieval["steps"][0]["tool_name"] == "fixture_lexical_search"
+
+    missing = client.get("/api/cases/CASE-DOES-NOT-EXIST/agent-runs")
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["error_code"] == "CASE_NOT_FOUND"

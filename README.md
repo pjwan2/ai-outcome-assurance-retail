@@ -16,7 +16,7 @@ enterprise safety. All orders/sellers/customers/products/reviewers are synthetic
 ```bash
 make setup
 make migrate
-make test        # 48 tests
+make test        # 49 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON
