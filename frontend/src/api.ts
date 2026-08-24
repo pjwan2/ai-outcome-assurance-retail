@@ -95,6 +95,30 @@ export interface ReviewTask {
   decided_at: string | null;
 }
 
+export interface AgentStep {
+  sequence: number;
+  step_type: string;
+  tool_name: string | null;
+  candidate_evidence_ids: string[];
+  timestamp: string | null;
+}
+
+export interface AgentRunRecord {
+  agent_run_id: string;
+  agent_id: string;
+  parent_run_id: string | null;
+  stage: string;
+  max_tool_calls: number;
+  max_steps: number;
+  tool_calls_used: number;
+  steps_used: number;
+  termination_status: string | null;
+  termination_reason_codes: string[];
+  started_at: string | null;
+  ended_at: string | null;
+  steps: AgentStep[];
+}
+
 export interface ReleaseResult {
   release_id: string;
   config_name: string;
@@ -121,6 +145,7 @@ export const api = {
   getEvidence: (caseId: string) => request<Evidence[]>(`/api/cases/${caseId}/evidence`),
   getAuthority: (caseId: string) => request<AuthorityRecord[]>(`/api/cases/${caseId}/authority`),
   getTrace: (caseId: string) => request<TraceEvent[]>(`/api/cases/${caseId}/trace`),
+  getAgentRuns: (caseId: string) => request<AgentRunRecord[]>(`/api/cases/${caseId}/agent-runs`),
   verifyTrace: (caseId: string) => request<TraceVerifyResult>(`/api/cases/${caseId}/trace/verify`),
   replayCase: (caseId: string) => request<CaseSummary>(`/api/cases/${caseId}/replay`, { method: "POST" }),
   listReviews: () => request<ReviewTask[]>("/api/reviews"),

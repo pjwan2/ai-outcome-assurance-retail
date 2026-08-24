@@ -1,7 +1,17 @@
 import React from "react";
-import { api, AuthorityRecord, Claim, Evidence, ReleaseResult, ReviewTask, TraceEvent, CaseSummary } from "./api";
+import {
+  api,
+  AgentRunRecord,
+  AuthorityRecord,
+  Claim,
+  Evidence,
+  ReleaseResult,
+  ReviewTask,
+  TraceEvent,
+  CaseSummary,
+} from "./api";
 
-const TABS = ["Case Overview", "Evidence & Claims", "Review Queue", "Trace & Release"] as const;
+const TABS = ["Case Overview", "Agent Runs", "Evidence & Claims", "Review Queue", "Trace & Release"] as const;
 type Tab = (typeof TABS)[number];
 
 type Tone = "neutral" | "good" | "warn" | "bad";
@@ -194,6 +204,102 @@ function EvidenceAndClaims({ evidence, claims }: { evidence: Evidence[]; claims:
   );
 }
 
+function agentRunTone(status: string | null): Tone {
+  if (status === "COMPLETED") return "good";
+  if (status === "CONTROL_BLOCKED" || status === "TECHNICAL_FAILURE") return "bad";
+  if (status === "NEEDS_REVIEW" || status === "INSUFFICIENT_EVIDENCE") return "warn";
+  return "neutral";
+}
+
+function AgentRunCard({ run, indent }: { run: AgentRunRecord; indent: boolean }) {
+  return (
+    <div className="review-card" style={indent ? { marginLeft: 24 } : undefined}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <span className="review-id">{run.agent_id}</span>
+        <Pill tone={agentRunTone(run.termination_status)}>{run.termination_status ?? "RUNNING"}</Pill>
+      </div>
+      <p className="muted" style={{ margin: "0 0 6px" }}>
+        Stage {run.stage} · budget {run.tool_calls_used}/{run.max_tool_calls} tool calls,{" "}
+        {run.steps_used}/{run.max_steps} steps
+      </p>
+      {run.termination_reason_codes.length > 0 && (
+        <p className="muted" style={{ margin: "0 0 6px" }}>
+          Reasons: {run.termination_reason_codes.join(", ")}
+        </p>
+      )}
+      {run.steps.length > 0 && (
+        <table className="data-table" style={{ marginTop: 10 }}>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Step</th>
+              <th>Tool</th>
+              <th>Candidates</th>
+            </tr>
+          </thead>
+          <tbody>
+            {run.steps.map((s) => (
+              <tr key={s.sequence}>
+                <td className="mono">{s.sequence}</td>
+                <td>{s.step_type}</td>
+                <td className="muted">{s.tool_name ?? "—"}</td>
+                <td className="mono muted">{s.candidate_evidence_ids.join(", ") || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function AgentRuns({ agentRuns }: { agentRuns: AgentRunRecord[] }) {
+  const roots = agentRuns.filter((r) => !r.parent_run_id);
+  const childrenOf = (parentId: string) => agentRuns.filter((r) => r.parent_run_id === parentId);
+  const totalToolCalls = agentRuns.reduce((sum, r) => sum + r.tool_calls_used, 0);
+
+  return (
+    <div>
+      <div className="stat-grid">
+        <div className="stat-tile">
+          <div className="stat-tile-label">Agents involved</div>
+          <div className="stat-tile-value">{agentRuns.length}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="stat-tile-label">Tool calls used</div>
+          <div className="stat-tile-value">{totalToolCalls}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="stat-tile-label">Stage boundary</div>
+          <div className="stat-tile-value">
+            <Pill tone="neutral">INVESTIGATE only</Pill>
+          </div>
+        </div>
+      </div>
+
+      <Card
+        title="Supervised delegation tree"
+        hint={`${agentRuns.length} agent run${agentRuns.length === 1 ? "" : "s"}`}
+      >
+        {agentRuns.length === 0 && <p className="empty-state">No agent runs recorded for this case yet.</p>}
+        {roots.map((root) => (
+          <React.Fragment key={root.agent_run_id}>
+            <AgentRunCard run={root} indent={false} />
+            {childrenOf(root.agent_run_id).map((child) => (
+              <AgentRunCard key={child.agent_run_id} run={child} indent />
+            ))}
+          </React.Fragment>
+        ))}
+      </Card>
+      <p className="muted" style={{ margin: "0 0 20px" }}>
+        Every run above is confined to INVESTIGATE by a database constraint, not just application code
+        — none of it can reach the authority decision (see ADR 0003/0005). Candidates listed here are
+        unverified; only the Evidence &amp; Claims tab shows what VALIDATE actually admitted.
+      </p>
+    </div>
+  );
+}
+
 function ReviewQueue({ reviews, onDecided }: { reviews: ReviewTask[]; onDecided: () => void }) {
   const [busy, setBusy] = React.useState<string | null>(null);
 
@@ -350,6 +456,14 @@ const TAB_ICONS: Record<Tab, React.ReactNode> = {
       <path d="M8 9h8M8 13h8M8 17h4" strokeLinecap="round" />
     </svg>
   ),
+  "Agent Runs": (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="5.5" r="2.3" />
+      <circle cx="6" cy="18.5" r="2.3" />
+      <circle cx="18" cy="18.5" r="2.3" />
+      <path d="M12 7.8v4.2M12 12l-5 4.2M12 12l5 4.2" strokeLinecap="round" />
+    </svg>
+  ),
   "Evidence & Claims": (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <path d="M12 3l7 3.2v5.4c0 4.6-3 8.3-7 9.4-4-1.1-7-4.8-7-9.4V6.2L12 3z" />
@@ -375,6 +489,10 @@ const TAB_META: Record<Tab, { eyebrow: string; subtitle: string }> = {
     eyebrow: "Case",
     subtitle: "Synthetic order/seller/product timeline, current state, and the proposed action vs. what authority actually decided.",
   },
+  "Agent Runs": {
+    eyebrow: "Multi-agent",
+    subtitle: "A supervisor delegates to independent retrieval and critic agents, each a budget-bounded, auditable run confined to INVESTIGATE.",
+  },
   "Evidence & Claims": {
     eyebrow: "Investigation",
     subtitle: "Candidate material separated from verified evidence, and every claim resolved to TRUE, FALSE, or UNKNOWN — never guessed.",
@@ -396,6 +514,7 @@ export default function App() {
   const [evidence, setEvidence] = React.useState<Evidence[]>([]);
   const [authority, setAuthority] = React.useState<AuthorityRecord[]>([]);
   const [trace, setTrace] = React.useState<TraceEvent[]>([]);
+  const [agentRuns, setAgentRuns] = React.useState<AgentRunRecord[]>([]);
   const [reviews, setReviews] = React.useState<ReviewTask[]>([]);
   const [release, setRelease] = React.useState<ReleaseResult | null>(null);
   const [loadingRelease, setLoadingRelease] = React.useState(false);
@@ -406,18 +525,21 @@ export default function App() {
   const [traceVerified, setTraceVerified] = React.useState<boolean | null>(null);
 
   const loadCaseData = React.useCallback(async (caseId: string) => {
-    const [claimsData, evidenceData, authorityData, traceData, reviewsData, verifyData] = await Promise.all([
-      api.getClaims(caseId),
-      api.getEvidence(caseId),
-      api.getAuthority(caseId),
-      api.getTrace(caseId),
-      api.listReviews(),
-      api.verifyTrace(caseId),
-    ]);
+    const [claimsData, evidenceData, authorityData, traceData, agentRunsData, reviewsData, verifyData] =
+      await Promise.all([
+        api.getClaims(caseId),
+        api.getEvidence(caseId),
+        api.getAuthority(caseId),
+        api.getTrace(caseId),
+        api.getAgentRuns(caseId),
+        api.listReviews(),
+        api.verifyTrace(caseId),
+      ]);
     setClaims(claimsData);
     setEvidence(evidenceData);
     setAuthority(authorityData);
     setTrace(traceData);
+    setAgentRuns(agentRunsData);
     setReviews(reviewsData);
     setTraceVerified(verifyData.chain_verified);
   }, []);
@@ -520,6 +642,7 @@ export default function App() {
         {error && <div className="banner">Error: {error} (is the backend running on :8000?)</div>}
 
         {tab === "Case Overview" && <CaseOverview caseSummary={caseSummary} authority={authority} />}
+        {tab === "Agent Runs" && <AgentRuns agentRuns={agentRuns} />}
         {tab === "Evidence & Claims" && <EvidenceAndClaims evidence={evidence} claims={claims} />}
         {tab === "Review Queue" && (
           <ReviewQueue reviews={reviews} onDecided={() => caseSummary && loadCaseData(caseSummary.case_id)} />
