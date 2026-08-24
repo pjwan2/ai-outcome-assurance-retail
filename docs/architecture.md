@@ -10,10 +10,12 @@ Cross-cutting: CANONICAL STATE -> TRACE -> EVALUATION -> RELEASE GATE
 Implemented in [`backend/app/services/workflow.py`](../backend/app/services/workflow.py) as pure functions:
 `_investigate` -> `_validate` -> `_resolve` -> `_authorise` -> `_create_review_task` -> `_reconcile`,
 orchestrated by `run_case_pipeline`. Every stage appends `TraceEvent`s via `_TraceRecorder`.
+`_investigate` itself delegates to `app/agents.py::SupervisorPlanner` — see "Governed tools and
+budgets" below and [ADR 0005](adrs/0005-loop-controlled-multi-agent-investigation.md).
 
 ```mermaid
 flowchart LR
-    CASE[CASE fixture] --> INV[INVESTIGATE\nfixture lexical search]
+    CASE[CASE fixture] --> INV[INVESTIGATE\nSupervisor -> Retrieval + Critic agents]
     INV --> VAL[VALIDATE\nsource authority, entity binding,\nhash, staleness, injection scan]
     VAL --> RES[RESOLVE\ndeterministic tri-state claims]
     RES --> AUTH[AUTHORISE\nALLOW / DENY / REQUIRE_HUMAN]
@@ -38,12 +40,21 @@ than silently overwritten.
 is the only place an irreversible action (`AUTO_REFUND`) can run, and it checks `AuthorityDecision.ALLOW`
 before allowing it — see [ADR 0003](adrs/0003-model-does-not-own-authority.md).
 
-## Governed tools and budgets
+## Governed tools, budgets, and multi-agent investigation
 
 `app/tools.py` defines a Pydantic-validated tool allow-list (`extra="forbid"`); unknown tools and
 unexpected arguments raise before anything runs. `app/budget.py::RunBudget` caps tool calls per run;
 exhausting it produces `TerminationStatus.CONTROL_BLOCKED`, not an unhandled exception
 (`app/services/workflow.py::run_case_pipeline`).
+
+`app/agents.py::SupervisorPlanner` is the loop this budget bounds: it delegates to a `RetrievalAgent`
+(the fixture-lexical-search lookup) and an independent `CriticAgent` (a second opinion on candidate
+case binding), producing durable `AgentRun`/`AgentStep`/`AgentHandoff` rows instead of the transient,
+in-memory-only bookkeeping `RunBudget` had on its own — `GET /api/cases/{case_id}/agent-runs` exposes
+the recorded loop. Every `AgentRun.stage` is `'INVESTIGATE'`, enforced by a database `CheckConstraint`,
+not just application code: nothing downstream (`_validate` onward) can see an agent's output except
+the same unverified candidate list `_investigate` always returned. See
+[ADR 0005](adrs/0005-loop-controlled-multi-agent-investigation.md).
 
 ## State machine and trace hash chain
 

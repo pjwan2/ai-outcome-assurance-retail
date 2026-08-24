@@ -10,11 +10,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.agents import REGISTERED_AGENTS
 from app.auth import Principal, require_auth
 from app.db import Base, SessionLocal, engine
 from app.evaluation import run_evaluation
 from app.models import TraceEvent
-from app.orm_models import CaseORM, ReviewTaskORM
+from app.orm_models import AgentRunORM, CaseORM, ReviewTaskORM
 from app.persistence import (
     persist_case_run,
     persist_evaluation_run,
@@ -255,6 +256,64 @@ def verify_case_trace(case_id: str, db: Session = Depends(get_db)) -> dict:
     return {"case_id": case_id, "event_count": len(events), "chain_verified": verify_trace_chain(case_id, events)}
 
 
+@app.get("/api/agent-definitions")
+def list_agent_definitions() -> list[dict]:
+    """The versioned registry of participants allowed to run at INVESTIGATE
+    (app.agents.REGISTERED_AGENTS). Only DETERMINISTIC providers exist today."""
+    return [
+        {
+            "agent_id": defn.agent_id,
+            "name": defn.name,
+            "role": defn.role.value,
+            "provider": defn.provider.value,
+            "model_name": defn.model_name,
+            "model_version": defn.model_version,
+            "prompt_version": defn.prompt_version,
+            "config_hash": defn.config_hash,
+            "is_active": defn.is_active,
+        }
+        for defn in REGISTERED_AGENTS
+    ]
+
+
+@app.get("/api/cases/{case_id}/agent-runs")
+def get_case_agent_runs(case_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    """The durable AgentRun/AgentStep record of this case's INVESTIGATE
+    stage: one supervisor run plus its delegated child runs (see
+    app.agents.SupervisorPlanner), each carrying the loop-control budget it
+    was bound by and the steps it actually took."""
+    case = db.get(CaseORM, case_id)
+    if case is None:
+        raise _error(404, "CASE_NOT_FOUND", f"No case with id {case_id}")
+    return [
+        {
+            "agent_run_id": r.agent_run_id,
+            "agent_id": r.agent_id,
+            "parent_run_id": r.parent_run_id,
+            "stage": r.stage,
+            "max_tool_calls": r.max_tool_calls,
+            "max_steps": r.max_steps,
+            "tool_calls_used": r.tool_calls_used,
+            "steps_used": r.steps_used,
+            "termination_status": r.termination_status,
+            "termination_reason_codes": r.termination_reason_codes,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+            "steps": [
+                {
+                    "sequence": s.sequence,
+                    "step_type": s.step_type,
+                    "tool_name": s.tool_name,
+                    "candidate_evidence_ids": s.candidate_evidence_ids,
+                    "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                }
+                for s in r.steps
+            ],
+        }
+        for r in db.query(AgentRunORM).filter_by(case_id=case_id).order_by(AgentRunORM.started_at).all()
+    ]
+
+
 @app.post("/api/cases/{case_id}/replay")
 def replay_case(
     case_id: str, db: Session = Depends(get_db), principal: Principal = Depends(require_auth)
@@ -362,6 +421,11 @@ def get_evaluation(evaluation_id: str, db: Session = Depends(get_db)) -> dict:
         "prompt_injection_altered_decision_count": row.prompt_injection_altered_decision_count,
         "per_slice": row.per_slice,
         "created_at": row.created_at.isoformat() if row.created_at else None,
+        "code_version": row.code_version,
+        "environment": row.environment,
+        "provider_versions": row.provider_versions,
+        "per_agent_slice": row.per_agent_slice,
+        "baseline_evaluation_id": row.baseline_evaluation_id,
     }
 
 

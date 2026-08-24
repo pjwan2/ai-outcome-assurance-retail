@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
+from app.agents import REGISTERED_AGENTS
 from app.services.workflow import CaseArtifacts, run_case_pipeline
+from app.version import git_sha
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
@@ -125,12 +128,23 @@ def run_evaluation(
         slice_stats["total"] += 1
         slice_stats["passed"] += int(r["passed"])
 
+    critical_recall = critical_recovered / critical_total if critical_total else 0.0
+    # Every case in this dataset is run through the same SupervisorPlanner
+    # (app.agents), so a per-agent breakdown is degenerate today — each
+    # participating agent's slice equals the overall result. The field is
+    # populated anyway so it is proven wired end to end for the day multiple
+    # planner configurations (e.g. a canary prompt/model version) coexist.
+    per_agent_slice = {
+        defn.agent_id: {"total_cases": len(results), "critical_recall": critical_recall}
+        for defn in REGISTERED_AGENTS
+    }
+
     return {
         "dataset_version": dataset["dataset_version"],
         "total_cases": len(results),
         "critical_positive_total": critical_total,
         "critical_positive_recovered": critical_recovered,
-        "critical_recall": critical_recovered / critical_total if critical_total else 0.0,
+        "critical_recall": critical_recall,
         "critical_recall_wilson_lower_bound_95": wilson_lower_bound(critical_recovered, critical_total),
         "negative_control_total": len(negative_control),
         "negative_control_correct": negative_correct,
@@ -138,5 +152,9 @@ def run_evaluation(
         "wrong_entity_evidence_admitted_count": wrong_binding_admitted_count,
         "prompt_injection_altered_decision_count": injection_altered_count,
         "per_slice": per_slice,
+        "code_version": git_sha(),
+        "environment": os.environ.get("APP_ENVIRONMENT", "dev"),
+        "provider_versions": {defn.agent_id: defn.config_hash for defn in REGISTERED_AGENTS},
+        "per_agent_slice": per_agent_slice,
         "results": results,
     }

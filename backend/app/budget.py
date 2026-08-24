@@ -33,3 +33,11 @@ class RunBudget:
         self._steps += 1
         if self._steps > self.max_steps:
             raise BudgetExceededError("steps", self.max_steps)
+
+    @property
+    def tool_calls_used(self) -> int:
+        return self._tool_calls
+
+    @property
+    def steps_used(self) -> int:
+        return self._steps

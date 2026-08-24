@@ -11,7 +11,6 @@ mistaken for a production claim.
 | Real retailer/order/CRM integration | No external system calls anywhere | Local JSON fixtures only |
 | Automatic refunds or other irreversible actions | `AUTO_REFUND_PERMITTED` is hard-coded FALSE, `enforce_action` blocks `AUTO_REFUND`/`ISSUE_REFUND` outside `ALLOW` | Enforced in code and tested (`tests/test_adversarial.py` #16) |
 | Enterprise legal/compliance accreditation | No accreditation process exists | N/A — explicitly out of scope (PRD §2) |
-| Autonomous multi-agent swarms | Single deterministic pipeline, no agent loop | `DeterministicInvestigationPlanner`-equivalent fixed logic only |
 | Cross-case long-term memory | Each run is independent | No memory store |
 | Production-scale vector infrastructure | Only fixture-backed lexical matching | No embeddings, no vector DB |
 | Live Anthropic/Google adapters | Not started | `app.tools`/pipeline interfaces are provider-neutral but no live adapter exists |
@@ -50,3 +49,12 @@ what changed is visible, not silently dropped:
   token, not a client-supplied field, and check the token's role against the review's
   `assigned_role` (403 on mismatch). See the IAM row above for what this is *not* — it is not
   enterprise IAM.
+- **Bounded, loop-controlled multi-agent investigation** — `app/agents.py::SupervisorPlanner`
+  delegates to an independent `RetrievalAgent` and `CriticAgent`, each a durable, budget-bounded
+  `AgentRun` with persisted `AgentStep`s (previously `RunBudget` was in-memory only and vanished after
+  each call). This is still what it was before, made real and auditable, not a step toward an
+  open-ended swarm: a database `CheckConstraint` confines every `AgentRun` to `INVESTIGATE`, `AUTHORISE`
+  remains untouched plain Python (ADR-0003), and both agents are deterministic/offline — no live
+  OpenAI/Anthropic adapter exists (see the row below). See
+  `docs/adrs/0005-loop-controlled-multi-agent-investigation.md` and
+  `backend/tests/test_agent_orchestration.py`.

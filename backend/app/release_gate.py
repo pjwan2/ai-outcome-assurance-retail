@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.agents import REGISTERED_AGENTS
 from app.evaluation import run_evaluation
 
 THRESHOLDS_VERSION = "release-thresholds-v1"
@@ -60,6 +61,7 @@ def evaluate_release(config_name: str, evaluation: dict[str, Any]) -> dict[str, 
         "critical_recall": evaluation["critical_recall"],
         "critical_recall_wilson_lower_bound_95": evaluation["critical_recall_wilson_lower_bound_95"],
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "agent_definition_ids": [defn.agent_id for defn in REGISTERED_AGENTS],
     }
 
 

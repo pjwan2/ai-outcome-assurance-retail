@@ -15,8 +15,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from app.agents import InvestigationResult, SupervisorPlanner
 from app.budget import BudgetExceededError, RunBudget
 from app.models import (
+    AgentHandoff,
+    AgentRun,
+    AgentStep,
     AuthorityDecision,
     AuthorityRecord,
     Claim,
@@ -29,7 +33,6 @@ from app.models import (
     TraceEvent,
 )
 from app.state_machine import CaseStatus, validate_transition
-from app.tools import validate_tool_call
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 RULE_VERSION = "rules-v2"
@@ -182,29 +185,24 @@ def verify_trace_chain(case_id: str, events: list[TraceEvent]) -> bool:
     return True
 
 
+_SUPERVISOR = SupervisorPlanner()
+
+
 def _investigate(
     case: dict[str, Any], sources: list[dict[str, Any]], trace: _TraceRecorder, budget: RunBudget
-) -> list[dict[str, Any]]:
-    """Return candidate source material bound to the case's declared source_refs.
+) -> InvestigationResult:
+    """Delegate to the SupervisorPlanner (app.agents), which orchestrates a
+    RetrievalAgent (candidate lookup) and a CriticAgent (independent binding
+    review) under this case's INVESTIGATE stage, producing durable
+    AgentRun/AgentStep/AgentHandoff records.
 
     Candidates are unverified: VALIDATE decides whether they are admissible
-    evidence. Each fixture lookup consumes one unit of the run's tool-call
-    budget; exhausting it raises BudgetExceededError.
+    evidence (ADR-0001). The retrieval agent's fixture lookup consumes one
+    unit of the run's tool-call budget; exhausting it raises
+    BudgetExceededError (app.agents.InvestigationBudgetExceeded, a subclass
+    carrying the partial agent-run records for audit).
     """
-    budget.consume_tool_call()
-    tool_args = {"case_id": case["case_id"], "query": None}
-    validate_tool_call("fixture_lexical_search", tool_args)
-    trace.record(
-        "INVESTIGATE", "CANDIDATE_SEARCH_STARTED", tool_name="fixture_lexical_search", arguments=tool_args
-    )
-    candidates = [s for s in sources if s["source_id"] in case["source_refs"]]
-    trace.record(
-        "INVESTIGATE",
-        "CANDIDATES_RETURNED",
-        tool_name="fixture_lexical_search",
-        evidence_ids=[c["source_id"] for c in candidates],
-    )
-    return candidates
+    return _SUPERVISOR.run(case, sources, trace, budget)
 
 
 def _validate(
@@ -569,6 +567,9 @@ class CaseArtifacts:
         outcome: Outcome,
         termination_status: TerminationStatus,
         trace_events: list[TraceEvent],
+        agent_runs: list[AgentRun] | None = None,
+        agent_steps: list[AgentStep] | None = None,
+        agent_handoffs: list[AgentHandoff] | None = None,
     ) -> None:
         self.case = case
         self.snapshots = snapshots
@@ -579,6 +580,9 @@ class CaseArtifacts:
         self.outcome = outcome
         self.termination_status = termination_status
         self.trace_events = trace_events
+        self.agent_runs = agent_runs or []
+        self.agent_steps = agent_steps or []
+        self.agent_handoffs = agent_handoffs or []
 
 
 def run_case_pipeline(
@@ -614,7 +618,7 @@ def run_case_pipeline(
     case_status = trace.transition(case_status, CaseStatus.INVESTIGATING)
 
     try:
-        candidates = _investigate(case, sources, trace, budget)
+        investigation = _investigate(case, sources, trace, budget)
     except BudgetExceededError as exc:
         trace.record("INVESTIGATE", "BUDGET_EXCEEDED", tool_name="fixture_lexical_search")
         return CaseArtifacts(
@@ -644,8 +648,10 @@ def run_case_pipeline(
             ),
             termination_status=TerminationStatus.CONTROL_BLOCKED,
             trace_events=trace.events,
+            agent_runs=getattr(exc, "agent_runs", []),
         )
 
+    candidates = investigation.candidates
     snapshots, evidence = _validate(case, candidates, trace)
     case_status = trace.transition(case_status, CaseStatus.EVIDENCE_VALIDATED)
 
@@ -678,6 +684,9 @@ def run_case_pipeline(
         outcome=outcome,
         termination_status=termination_status,
         trace_events=trace.events,
+        agent_runs=investigation.agent_runs,
+        agent_steps=investigation.agent_steps,
+        agent_handoffs=investigation.agent_handoffs,
     )
 
 

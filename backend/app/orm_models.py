@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -58,6 +59,7 @@ class CaseORM(Base):
     trace_events: Mapped[list[TraceEventORM]] = relationship(
         back_populates="case", cascade="all, delete-orphan", order_by="TraceEventORM.sequence"
     )
+    agent_runs: Mapped[list[AgentRunORM]] = relationship(back_populates="case", cascade="all, delete-orphan")
 
 
 class SourceSnapshotORM(Base):
@@ -185,6 +187,107 @@ class TraceEventORM(Base):
     __table_args__ = (UniqueConstraint("case_id", "sequence", name="uq_case_sequence"),)
 
 
+class AgentDefinitionORM(Base):
+    """Versioned registry of participants allowed to run at INVESTIGATE.
+    Only DETERMINISTIC providers are instantiated today — see app.agents."""
+
+    __tablename__ = "agent_definitions"
+
+    agent_id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    config_hash: Mapped[str] = mapped_column(String, nullable=False)
+    model_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class AgentRunORM(Base):
+    """A durable, budget-bounded agent loop. `stage` is constrained to
+    'INVESTIGATE' at the database level — the same fail-closed posture as
+    app.state_machine — because ADR-0003 requires that an agent can never
+    reach AUTHORISE directly."""
+
+    __tablename__ = "agent_runs"
+
+    agent_run_id: Mapped[str] = mapped_column(String, primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False, index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agent_definitions.agent_id"), nullable=False, index=True)
+    parent_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_runs.agent_run_id"), nullable=True, index=True
+    )
+    stage: Mapped[str] = mapped_column(String, nullable=False, default="INVESTIGATE")
+    max_tool_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_steps: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_wall_clock_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tool_calls_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    steps_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    termination_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    termination_reason_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    token_usage_prompt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_usage_completion: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    case: Mapped[CaseORM] = relationship(back_populates="agent_runs")
+    agent: Mapped[AgentDefinitionORM] = relationship()
+    steps: Mapped[list[AgentStepORM]] = relationship(
+        back_populates="agent_run", cascade="all, delete-orphan", order_by="AgentStepORM.sequence"
+    )
+
+    __table_args__ = (CheckConstraint("stage = 'INVESTIGATE'", name="ck_agent_run_stage_investigate_only"),)
+
+
+class AgentStepORM(Base):
+    """One loop iteration/turn within an AgentRun. `candidate_evidence_ids`
+    are proposals only — VALIDATE remains the sole gate that can promote a
+    candidate to admitted Evidence (ADR-0001)."""
+
+    __tablename__ = "agent_steps"
+
+    step_id: Mapped[str] = mapped_column(String, primary_key=True)
+    agent_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.agent_run_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_type: Mapped[str] = mapped_column(String, nullable=False)
+    tool_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    tool_input_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    tool_output_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    candidate_evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    agent_run: Mapped[AgentRunORM] = relationship(back_populates="steps")
+
+    __table_args__ = (UniqueConstraint("agent_run_id", "sequence", name="uq_agent_run_sequence"),)
+
+
+class AgentHandoffORM(Base):
+    """A bounded delegation edge from a supervising AgentRun to a specialist
+    AgentRun it spawned. `child_run_id` is unique: a run has at most one
+    delegating parent, so multi-agent participation on a case forms a tree,
+    not an open-ended swarm."""
+
+    __tablename__ = "agent_handoffs"
+
+    handoff_id: Mapped[str] = mapped_column(String, primary_key=True)
+    parent_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.agent_run_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    child_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.agent_run_id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    from_agent_id: Mapped[str] = mapped_column(ForeignKey("agent_definitions.agent_id"), nullable=False)
+    to_agent_id: Mapped[str] = mapped_column(ForeignKey("agent_definitions.agent_id"), nullable=False)
+    delegated_task: Mapped[str] = mapped_column(String, nullable=False)
+    reason_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class EvaluationRunORM(Base):
     __tablename__ = "evaluation_runs"
 
@@ -201,6 +304,16 @@ class EvaluationRunORM(Base):
     per_slice: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
+    # Enterprise provenance/comparison fields (all optional — additive to the
+    # original schema so existing evaluation writers keep working unchanged).
+    code_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    environment: Mapped[str] = mapped_column(String, nullable=False, default="dev")
+    provider_versions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    per_agent_slice: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    baseline_evaluation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("evaluation_runs.evaluation_id"), nullable=True
+    )
+
 
 class ReleaseRecordORM(Base):
     __tablename__ = "release_records"
@@ -215,3 +328,11 @@ class ReleaseRecordORM(Base):
         ForeignKey("evaluation_runs.evaluation_id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    # Enterprise release-gate fields: human sign-off and rollback lineage —
+    # a real release gate needs approval, not just an automated PASS/BLOCK.
+    approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approval_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rollback_of: Mapped[str | None] = mapped_column(ForeignKey("release_records.release_id"), nullable=True)
+    agent_definition_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
