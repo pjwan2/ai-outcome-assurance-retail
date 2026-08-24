@@ -16,7 +16,7 @@ enterprise safety. All orders/sellers/customers/products/reviewers are synthetic
 ```bash
 make setup
 make migrate
-make test        # 39 tests
+make test        # 48 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON
@@ -50,6 +50,12 @@ dev token automatically; set `API_TOKENS` in `.env` for anything beyond a solo l
   (`app/state_machine.py`) and a SHA-256 hash-chained `TraceEvent` per material step
   (`GET /api/cases/{case_id}/trace/verify`).
 - **Typed persistence**: SQLAlchemy 2 + Alembic (`backend/app/orm_models.py`, `backend/alembic/`).
+- **Bounded, budget-controlled multi-agent investigation**: a `SupervisorPlanner` delegates to a
+  `RetrievalAgent` and an independent `CriticAgent` (`backend/app/agents.py`), producing durable
+  `AgentRun`/`AgentStep`/`AgentHandoff` records (`GET /api/cases/{case_id}/agent-runs`,
+  `GET /api/agent-definitions`). Still deterministic and offline — a DB-level constraint keeps every
+  agent confined to `INVESTIGATE`; `AUTHORISE` stays plain Python (see
+  [`docs/adrs/0005-loop-controlled-multi-agent-investigation.md`](docs/adrs/0005-loop-controlled-multi-agent-investigation.md)).
 - **Tri-state claims, independent authority gate, human review queue** — never an LLM prompt
   (`app/services/workflow.py::_authorise`, `app/authority_enforcement.py`).
 - **28-case versioned evaluation dataset + deterministic release gate**, R1 reference vs R2 regression

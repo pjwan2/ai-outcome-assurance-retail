@@ -25,7 +25,11 @@ No self-assessed seniority claims below — only what is runnable and where.
 | `TraceEvent` SHA-256 hash chain (tamper/reorder detection) | `app/services/workflow.py::_TraceRecorder`, `verify_trace_chain()` | `pytest tests/test_trace_chain.py`, `GET /api/cases/{case_id}/trace/verify` |
 | Counter-evidence linked on contradictory claims | `app/services/workflow.py::_resolve` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
 | Ruff + mypy clean | — | `make lint`, `make typecheck` |
-| 39 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| 48 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| Loop-controlled agent runs: persisted budget consumption and step-by-step audit trail, not just an in-memory counter | `app/budget.py::RunBudget.tool_calls_used/steps_used`, `app/agents.py`, `app/orm_models.py::AgentRunORM/AgentStepORM` | `pytest tests/test_agent_orchestration.py::test_investigate_produces_supervisor_and_two_child_agent_runs` |
+| Bounded multi-agent delegation (Supervisor → Retrieval + Critic agents), INVESTIGATE-only boundary enforced by a database CheckConstraint, not just application code | `app/agents.py::SupervisorPlanner`, `AgentRunORM` (`ck_agent_run_stage_investigate_only`) | `pytest tests/test_agent_orchestration.py::test_agent_run_stage_is_constrained_to_investigate_at_the_db_level` |
+| A CONTROL_BLOCKED (budget-exhausted) run still leaves an auditable partial agent-run record, not a silent failure | `app/agents.py::InvestigationBudgetExceeded` | `pytest tests/test_agent_orchestration.py::test_control_blocked_run_still_persists_partial_agent_runs` |
+| Enterprise evaluation provenance: code version (git SHA), environment tag, per-agent metric slice, human release-approval fields | `app/evaluation.py::run_evaluation`, `app/orm_models.py::EvaluationRunORM/ReleaseRecordORM` | `GET /api/evaluations/{id}` returns `code_version`/`environment`/`per_agent_slice` |
 | CI passing on GitHub Actions (backend + frontend) | `.github/workflows/ci.yml` | https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354 — both jobs green |
 | Four runnable fixture cases, `case_id` actually respected | `app/fixtures/cases/CASE-RET-00{2,3,4}.json`, `app/services/workflow.py::load_case_fixture` | `pytest tests/test_api.py::test_list_case_fixtures_and_run_a_non_hero_case` |
 | Bearer-token auth + role-checked review decisions | `app/auth.py::require_auth`, `app/api.py::post_review_decision` | `pytest tests/test_api.py::test_create_case_requires_auth`, `::test_wrong_role_cannot_decide_review` |
@@ -41,9 +45,12 @@ No self-assessed seniority claims below — only what is runnable and where.
 
 ## PROPOSED FOR ENTERPRISE PRODUCTION
 
-See `docs/production_gap_register.md` in full — IAM, retention policy, distributed tracing, real CRM
-integration, live model adapters, containerisation, CI/CD, multi-case intake, CaseStatus enforcement,
-trace hash chaining.
+See `docs/production_gap_register.md` in full for the current, maintained list — as of this writing:
+enterprise IAM/SSO, PII/data-retention policy, distributed queues/tracing, real retailer/CRM
+integration, live OpenAI/Anthropic model adapters, legal/compliance accreditation, cross-case
+long-term memory, production-scale vector infrastructure. (Containerisation, CI/CD, multi-case intake,
+`CaseStatus` enforcement, trace hash chaining, and bounded multi-agent investigation are now resolved
+— see that file's "Resolved since the previous version" section, not this stale list.)
 
 ## What is safe to say in an interview
 
@@ -55,6 +62,9 @@ trace hash chaining.
   decision, because the decision only ever reads typed Claim objects, never raw text."
 - "24/24 observed critical recall on this dataset has a Wilson 95% lower bound of ~0.86 — I did not
   present the raw 100% as if it were a guarantee."
+- "I built a bounded, budget-controlled multi-agent investigation loop — a supervisor delegates to
+  independent retrieval and critic agents — and the constraint that keeps any agent from reaching the
+  authority decision is enforced by a database CheckConstraint, not just trusted application code."
 
 ## What must NOT be claimed
 
@@ -62,5 +72,7 @@ trace hash chaining.
 - No claim that R2 reproduces a specific "12/24" degraded-recall number — it does not, and the honest
   number is documented in `docs/evaluation.md`.
 - No claim of live OpenAI/Anthropic integration — none exists in this repository.
+  `AgentProvider.OPENAI`/`ANTHROPIC` are schema-ready enum values only; every agent that actually runs
+  (`RetrievalAgent`, `CriticAgent`, `SupervisorPlanner`) is deterministic and offline.
 - No claim that `docker compose up --build` has been run successfully — the Dockerfiles/compose file
   exist and were reviewed, but the build was not executed (no Docker daemon in the dev sandbox).
