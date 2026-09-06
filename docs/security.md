@@ -95,12 +95,19 @@
   `fastapi==0.141.1`, the first fastapi release with no `starlette<0.51` upper
   bound — after `pip-audit` found 7 CVEs against the previously-resolved
   `starlette==0.50.0`; the full test suite was re-run and stayed green after the
-  bump). `npm audit` has one remaining accepted finding: `esbuild`/`vite`
-  (moderate) — a dev-server-only exposure with no effect on the built static
-  assets actually served in production — whose only fix is a breaking `vite` v8
-  major upgrade, not taken in this pass; the CI step reports it
-  (`continue-on-error: true`) rather than either hiding it or blocking on an
-  unreviewed breaking change.
+  bump). `npm audit` reports no known vulnerabilities. It previously had a
+  moderate `esbuild`/`vite` finding accepted with a comment saying its only
+  fix was a breaking `vite` v8 upgrade "not taken in this pass" — that
+  comment went stale: removing the CI step's `continue-on-error: true`
+  (below) surfaced a second, separate **high**-severity finding
+  (`GHSA-fx2h-pf6j-xcff`, a dev-server `fs.deny` path-traversal bypass on
+  Windows) that the old moderate-only framing didn't cover and that
+  `continue-on-error` had been silently passing either way. Actually did the
+  vite v8 upgrade this time: `npx tsc --noEmit`, `npm run build`, and
+  `npm run dev` were all re-verified working after the bump, and `npm audit
+  --audit-level=high` now finds nothing. CI runs the same command with no
+  `continue-on-error`, so a real future finding fails the build instead of
+  being silently passed.
 - **Docker build verified end-to-end.** `docker compose up --build` built both images; the backend ran
   its Alembic migration on boot (all 5 revisions), `GET /health`, `POST /api/cases`, `GET
   /api/cases/{id}/trace/verify` (`chain_verified: true`), and `GET /api/cases/{id}/guardrails` were all

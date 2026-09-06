@@ -38,8 +38,6 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run build
-      # esbuild/vite (moderate, dev-server-only) has no non-breaking fix as of
-      # this writing — reported, not silently hidden, but not blocking on an
-      # unreviewed vite v8 major bump. See docs/security.md.
+      # No continue-on-error: a real high/critical finding fails the build
+      # rather than being silently passed. See docs/security.md.
       - run: npm audit --audit-level=high
-        continue-on-error: true
