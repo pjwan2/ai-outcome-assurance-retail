@@ -38,8 +38,6 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run build
-      # --audit-level=high already ignores the one known moderate finding
-      # (esbuild/vite, no non-breaking fix as of this writing — see
-      # docs/security.md); no continue-on-error here, so a real future
-      # high/critical finding fails the build instead of being silently passed.
+      # No continue-on-error: a real high/critical finding fails the build
+      # rather than being silently passed. See docs/security.md.
       - run: npm audit --audit-level=high
