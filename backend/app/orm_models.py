@@ -366,3 +366,58 @@ class ReleaseRecordORM(Base):
     approval_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     rollback_of: Mapped[str | None] = mapped_column(ForeignKey("release_records.release_id"), nullable=True)
     agent_definition_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
+class ModelReleaseORM(Base):
+    """A model-serving checkpoint's release lifecycle (app.model_release) —
+    distinct from ReleaseRecordORM above, which is the case-assurance
+    evaluation gate's result record. `rollback_of` on ReleaseRecordORM is
+    still just a field with no enforcing code behind it (see
+    docs/production_gap_register.md); ModelReleaseORM plus app.model_release
+    is where a real gate-then-approve-then-activate-then-rollback machinery
+    actually lives, for backend/app/serving/'s checkpoints specifically."""
+
+    __tablename__ = "model_releases"
+
+    release_id: Mapped[str] = mapped_column(String, primary_key=True)
+    model_name: Mapped[str] = mapped_column(String, nullable=False)
+    checkpoint_id: Mapped[str] = mapped_column(String, nullable=False)
+    config_hash: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="CANDIDATE")
+    previous_release_id: Mapped[str | None] = mapped_column(
+        ForeignKey("model_releases.release_id"), nullable=True
+    )
+    gate_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    gate_reason_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activated_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('CANDIDATE', 'ACTIVE', 'SUPERSEDED', 'ROLLED_BACK')",
+            name="ck_model_release_status",
+        ),
+    )
+
+
+class ModelReleaseAuditEventORM(Base):
+    """An append-only audit trail entry for one ModelRelease lifecycle event
+    (REGISTERED / GATE_RUN / APPROVED / ACTIVATED / ROLLED_BACK). Rollback in
+    particular must leave a real, queryable audit record — not just a log
+    line — see app.model_release.rollback_active_release."""
+
+    __tablename__ = "model_release_audit_events"
+
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    release_id: Mapped[str] = mapped_column(
+        ForeignKey("model_releases.release_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String, nullable=False)
+    actor: Mapped[str | None] = mapped_column(String, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

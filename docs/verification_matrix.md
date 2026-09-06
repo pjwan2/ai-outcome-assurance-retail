@@ -33,12 +33,15 @@ does not implement.
 | `TraceEvent` SHA-256 hash chain (tamper/reorder detection) | `app/services/trace.py::TraceRecorder`, `verify_trace_chain()` | `pytest tests/test_trace_chain.py`, `GET /api/cases/{case_id}/trace/verify` |
 | Counter-evidence linked on contradictory claims | `app/services/resolve.py::resolve_claims` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
 | Ruff + mypy clean | — | `make lint`, `make typecheck` |
-| 87 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| 99 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
 | Model-serving slice: bearer-token-authenticated async SSE streaming, one deadline covering the whole request (queue wait + first token + full stream, not just the first token), client-disconnect releases its concurrency slot, bounded concurrency/backpressure (503), rate limiting keyed by authenticated principal not client-supplied session_id (429), retry-then-graceful-failure on both pre-stream and mid-stream backend errors, model/checkpoint version on every response | `app/serving/` (`model_backend.py`, `concurrency.py`, `rate_limit.py`, `streaming.py`, `router.py`) | `pytest tests/test_serving.py` (19 tests) |
 | Rate-limit key cannot be spoofed by rotating session_id; a real bug found and fixed | `app/serving/router.py::generate_stream` keys `RATE_LIMITER.check` on `principal.reviewer_id` | `pytest tests/test_serving.py::test_rate_limit_is_keyed_by_principal_not_client_supplied_session_id` |
 | Fake-model failure injection is a dependency override, not a public request field — a real bug found and fixed | `app/serving/router.py::get_model_backend`, `DeterministicFakeModel.fail_mode` (construction-time only) | `pytest tests/test_serving.py -k failure_recovers or exhausts_retries or mid_stream_failure` |
 | Structured JSON logs and Prometheus metrics for the serving slice, exposed over real HTTP | `app/serving/logging_utils.py`, `app/serving/metrics.py`, `GET /metrics` | `pytest tests/test_serving.py -k "metrics or structured_log"` |
 | No live model call anywhere in the serving slice — a deterministic, hash-seeded fake model | `app/serving/model_backend.py::DeterministicFakeModel` | `pytest tests/test_serving.py::test_repeated_prompt_is_deterministic` |
+| Model-release lifecycle: cannot activate without passing the gate, cannot activate without approval, activation is atomic and demotes the previous active release, rollback restores the previous known-good checkpoint, repeated rollback with the same idempotency key is a no-op, rollback writes a real queryable audit record | `app/model_release.py`, `ModelReleaseORM`/`ModelReleaseAuditEventORM` | `pytest tests/test_model_release.py` (12 tests) |
+| Activating or rolling back a model release changes what a real HTTP request observes, not just a database row | `app/serving/router.py::get_model_backend` reads `app.model_release.get_active_model_info()` on every request | `pytest tests/test_model_release.py::test_real_requests_observe_activation_and_rollback_end_to_end` |
+| `SUPERSEDED` (normal forward progress) is kept distinct from `ROLLED_BACK` (explicit revert) in the audit trail | `app/model_release.py::activate_release`/`rollback_active_release` | `pytest tests/test_model_release.py::test_second_activation_supersedes_not_rolls_back_the_first` |
 | Dependency vulnerabilities found and fixed, not just scanned: `pip-audit` surfaced 7 CVEs against the previously-resolved `starlette==0.50.0`; fixed by pairing `fastapi==0.141.1` with `starlette==1.6.0` (the first fastapi release with no `starlette<0.51` ceiling), full suite re-verified green after | `backend/requirements.txt`, `docs/security.md` | `pip-audit -r requirements.txt` → "No known vulnerabilities found" |
 | Loop-controlled agent runs: persisted budget consumption and step-by-step audit trail, not just an in-memory counter | `app/budget.py::RunBudget.tool_calls_used/steps_used`, `app/agents.py`, `app/orm_models.py::AgentRunORM/AgentStepORM` | `pytest tests/test_agent_orchestration.py::test_investigate_produces_supervisor_and_two_child_agent_runs` |
 | Bounded multi-agent delegation (Supervisor → Retrieval + Critic agents), INVESTIGATE-only boundary enforced by a database CheckConstraint, not just application code | `app/agents.py::SupervisorPlanner`, `AgentRunORM` (`ck_agent_run_stage_investigate_only`) | `pytest tests/test_agent_orchestration.py::test_agent_run_stage_is_constrained_to_investigate_at_the_db_level` |
@@ -145,3 +148,12 @@ Each of these is true only in the specific scope stated — the scope is the poi
 - No claim that the retry path has been exercised against a real flaky network — `tenacity`-based retry
   is proven against `DeterministicFakeModel`'s injectable `fail_mode`, a controlled test double, not a
   live backend under real-world failure conditions.
+- No claim that `app.model_release`'s release gate is a real quality/regression benchmark — it is a
+  deterministic smoke check (nothing raises, every fixed prompt yields a token) against a fake model
+  that cannot meaningfully vary in "quality" between checkpoints. No claim of automatic
+  regression-triggered rollback — `rollback_active_release` is always called explicitly, never by
+  continuous monitoring on its own. No claim that this coordinates across multiple instances —
+  `get_active_model_info()` is one process's in-memory cache. See
+  [ADR 0007](adrs/0007-model-release-lifecycle.md) and `docs/production_gap_register.md`.
+- No claim that `ReleaseRecordORM.rollback_of` (the case-assurance evaluation gate, unrelated to
+  `app.model_release`) does anything — it remains an unenforced field, exactly as before.

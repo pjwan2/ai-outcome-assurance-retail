@@ -64,12 +64,16 @@ class DeterministicFakeModel:
     """
 
     def __init__(
-        self, token_delay_seconds: float = 0.01, num_tokens: int = 8, fail_mode: str | None = None
+        self,
+        token_delay_seconds: float = 0.01,
+        num_tokens: int = 8,
+        fail_mode: str | None = None,
+        info: ModelInfo | None = None,
     ) -> None:
         self.token_delay_seconds = token_delay_seconds
         self.num_tokens = num_tokens
         self.fail_mode = fail_mode
-        self.info = DEFAULT_MODEL_INFO
+        self.info = info or DEFAULT_MODEL_INFO
 
     def _tokens_for(self, prompt: str) -> list[str]:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()

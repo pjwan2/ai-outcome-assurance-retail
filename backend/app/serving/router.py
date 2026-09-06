@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.auth import Principal, require_auth
+from app.model_release import get_active_model_info
 from app.serving.concurrency import BackpressureRejected, ConcurrencyLimiter
 from app.serving.metrics import (
     CONTENT_TYPE_LATEST,
@@ -33,7 +34,7 @@ from app.serving.metrics import (
     RATE_LIMITED_TOTAL,
     render_metrics,
 )
-from app.serving.model_backend import DeterministicFakeModel
+from app.serving.model_backend import DeterministicFakeModel, ModelInfo
 from app.serving.rate_limit import RateLimitExceeded, TokenBucketRateLimiter
 from app.serving.streaming import stream_generation
 
@@ -64,8 +65,21 @@ def get_model_backend() -> DeterministicFakeModel:
     (`app.dependency_overrides[get_model_backend] = ...`) to inject a model
     configured with a specific `fail_mode` — that is the only way to make a
     request fail on demand; it is not a field a real client can set (see
-    app.serving.model_backend.DeterministicFakeModel)."""
-    return MODEL
+    app.serving.model_backend.DeterministicFakeModel).
+
+    Pacing (`token_delay_seconds`/`num_tokens`/`fail_mode`) comes from the
+    module-level `MODEL` template (tests monkeypatch this directly), but
+    `info` — the `model_name`/`checkpoint_id` a client actually sees — comes
+    from `app.model_release.get_active_model_info()`. Activating or rolling
+    back a `ModelRelease` therefore changes what a real request observes,
+    not just a row in a table (see app/model_release.py)."""
+    active = get_active_model_info()
+    return DeterministicFakeModel(
+        token_delay_seconds=MODEL.token_delay_seconds,
+        num_tokens=MODEL.num_tokens,
+        fail_mode=MODEL.fail_mode,
+        info=ModelInfo(model_name=active.model_name, model_version="v1", checkpoint_id=active.checkpoint_id),
+    )
 
 
 class GenerateRequest(BaseModel):

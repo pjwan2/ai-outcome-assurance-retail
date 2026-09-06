@@ -1,0 +1,247 @@
+"""Tests for app.model_release: the gate-then-approve-then-activate-then-
+rollback lifecycle for backend/app/serving/'s model checkpoints.
+
+Each test gets a fresh in-memory database (matching tests/test_persistence.py's
+pattern) so DB state never leaks between tests. `app.model_release._ACTIVE_CACHE`
+is a process-local module global, not database state, so it's reset by an
+autouse fixture instead.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+import app.model_release as model_release
+from app.api import app
+from app.auth import DEFAULT_DEV_TOKEN
+from app.db import Base
+from app.model_release import (
+    ActiveModelInfo,
+    ModelReleaseStatus,
+    NoActiveReleaseError,
+    NoPreviousReleaseError,
+    ReleaseGateNotPassedError,
+    ReleaseNotApprovedError,
+    activate_release,
+    approve_release,
+    get_active_model_info,
+    register_candidate,
+    rollback_active_release,
+    run_release_gate,
+)
+from app.orm_models import ModelReleaseAuditEventORM
+from app.serving.model_backend import DeterministicFakeModel
+
+AUTH_HEADERS = {"Authorization": f"Bearer {DEFAULT_DEV_TOKEN}"}
+
+
+def _done_event_data(sse_text: str) -> dict:
+    for line in sse_text.splitlines():
+        if line.startswith("data:"):
+            payload = json.loads(line.removeprefix("data:").strip())
+            if "checkpoint_id" in payload:
+                return payload
+    raise AssertionError(f"no done event found in SSE response: {sse_text!r}")
+
+
+def _session_factory():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine)()
+
+
+@pytest.fixture(autouse=True)
+def _reset_active_cache():
+    original = model_release._ACTIVE_CACHE
+    yield
+    model_release._ACTIVE_CACHE = original
+
+
+async def _gated_and_approved_candidate(session, *, checkpoint_id: str, approved_by: str = "alice"):
+    release = register_candidate(
+        session, model_name="deterministic-fake-model", checkpoint_id=checkpoint_id, config_hash=f"hash-{checkpoint_id}"
+    )
+    await run_release_gate(session, release, DeterministicFakeModel(token_delay_seconds=0))
+    approve_release(session, release, approved_by=approved_by)
+    return release
+
+
+# --- Cannot activate without passing the gate / without approval ----------
+
+
+async def test_cannot_activate_without_passing_release_gate():
+    session = _session_factory()
+    release = register_candidate(session, model_name="m", checkpoint_id="ckpt-1", config_hash="h1")
+    # Gate never run: gate_passed is still None.
+    with pytest.raises(ReleaseGateNotPassedError):
+        activate_release(session, release, activated_by="alice")
+
+
+async def test_cannot_activate_a_release_that_failed_its_gate():
+    session = _session_factory()
+    release = register_candidate(session, model_name="m", checkpoint_id="ckpt-1", config_hash="h1")
+    await run_release_gate(session, release, DeterministicFakeModel(token_delay_seconds=0, fail_mode="permanent"))
+    assert release.gate_passed is False
+    assert "GENERATION_FAILED" in release.gate_reason_codes
+    with pytest.raises(ReleaseGateNotPassedError):
+        activate_release(session, release, activated_by="alice")
+
+
+async def test_cannot_activate_without_approval():
+    session = _session_factory()
+    release = register_candidate(session, model_name="m", checkpoint_id="ckpt-1", config_hash="h1")
+    await run_release_gate(session, release, DeterministicFakeModel(token_delay_seconds=0))
+    assert release.gate_passed is True
+    with pytest.raises(ReleaseNotApprovedError):
+        activate_release(session, release, activated_by="alice")
+
+
+# --- Activation makes traffic read the new checkpoint ----------------------
+
+
+async def test_activating_a_release_makes_get_active_model_info_reflect_it():
+    session = _session_factory()
+    release = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-v2")
+    activate_release(session, release, activated_by="alice")
+
+    active = get_active_model_info()
+    assert active.checkpoint_id == "ckpt-v2"
+    assert active.release_id == release.release_id
+
+
+async def test_second_activation_supersedes_not_rolls_back_the_first():
+    session = _session_factory()
+    first = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-v1")
+    activate_release(session, first, activated_by="alice")
+
+    second = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-v2")
+    activate_release(session, second, activated_by="alice")
+
+    session.refresh(first)
+    session.refresh(second)
+    assert first.status == ModelReleaseStatus.SUPERSEDED.value
+    assert second.status == ModelReleaseStatus.ACTIVE.value
+    assert second.previous_release_id == first.release_id
+    assert get_active_model_info().checkpoint_id == "ckpt-v2"
+
+
+# --- Rollback ---------------------------------------------------------
+
+
+async def test_rollback_restores_the_previous_known_good_version():
+    session = _session_factory()
+    first = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-good")
+    activate_release(session, first, activated_by="alice")
+    second = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-bad")
+    activate_release(session, second, activated_by="alice")
+
+    restored = rollback_active_release(session, activated_by="oncall-bob", idempotency_key="rb-1")
+
+    assert restored.release_id == first.release_id
+    assert restored.status == ModelReleaseStatus.ACTIVE.value
+    session.refresh(second)
+    assert second.status == ModelReleaseStatus.ROLLED_BACK.value
+    assert get_active_model_info().checkpoint_id == "ckpt-good"
+
+
+async def test_repeated_rollback_with_the_same_idempotency_key_is_a_no_op():
+    session = _session_factory()
+    first = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-good")
+    activate_release(session, first, activated_by="alice")
+    second = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-bad")
+    activate_release(session, second, activated_by="alice")
+
+    first_result = rollback_active_release(session, activated_by="oncall-bob", idempotency_key="rb-1")
+    second_result = rollback_active_release(session, activated_by="oncall-bob", idempotency_key="rb-1")
+
+    assert first_result.release_id == second_result.release_id == first.release_id
+    audit_events = (
+        session.query(ModelReleaseAuditEventORM)
+        .filter_by(event_type="ROLLED_BACK", idempotency_key="rb-1")
+        .all()
+    )
+    assert len(audit_events) == 1, "a repeated rollback must not write a second audit event"
+
+
+async def test_rollback_without_an_active_release_raises():
+    session = _session_factory()
+    with pytest.raises(NoActiveReleaseError):
+        rollback_active_release(session, activated_by="bob", idempotency_key="rb-x")
+
+
+async def test_rollback_of_the_first_ever_release_raises_no_previous():
+    session = _session_factory()
+    only_release = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-only")
+    activate_release(session, only_release, activated_by="alice")
+
+    with pytest.raises(NoPreviousReleaseError):
+        rollback_active_release(session, activated_by="bob", idempotency_key="rb-x")
+
+
+async def test_rollback_writes_a_real_audit_record():
+    session = _session_factory()
+    first = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-good")
+    activate_release(session, first, activated_by="alice")
+    second = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-bad")
+    activate_release(session, second, activated_by="alice")
+
+    rollback_active_release(session, activated_by="oncall-bob", idempotency_key="rb-audit")
+
+    event = (
+        session.query(ModelReleaseAuditEventORM)
+        .filter_by(event_type="ROLLED_BACK", idempotency_key="rb-audit")
+        .one()
+    )
+    assert event.actor == "oncall-bob"
+    assert event.release_id == first.release_id  # the release that became active again
+    assert event.detail["rolled_back_from"] == second.release_id
+
+
+# --- Sanity: the cache really is process-local, not a DB read --------------
+
+
+def test_active_model_info_defaults_before_anything_is_ever_activated():
+    model_release._ACTIVE_CACHE = ActiveModelInfo(
+        release_id="RELEASE-BOOTSTRAP", model_name="deterministic-fake-model", checkpoint_id="bootstrap"
+    )
+    assert get_active_model_info().release_id == "RELEASE-BOOTSTRAP"
+
+
+# --- End-to-end: activation/rollback actually change what HTTP traffic sees
+
+
+async def test_real_requests_observe_activation_and_rollback_end_to_end():
+    """The claim this whole module exists to prove: activating or rolling
+    back a ModelRelease is not just a database row — a real request to
+    POST /api/generate/stream observes the change, because
+    app.serving.router.get_model_backend reads the same process-local cache
+    activate_release/rollback_active_release update."""
+    session = _session_factory()
+    first = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-e2e-good")
+    activate_release(session, first, activated_by="alice")
+
+    with TestClient(app) as client:
+        before = _done_event_data(
+            client.post("/api/generate/stream", headers=AUTH_HEADERS, json={"prompt": "x"}).text
+        )
+        assert before["checkpoint_id"] == "ckpt-e2e-good"
+
+        second = await _gated_and_approved_candidate(session, checkpoint_id="ckpt-e2e-bad")
+        activate_release(session, second, activated_by="alice")
+
+        after_activation = _done_event_data(
+            client.post("/api/generate/stream", headers=AUTH_HEADERS, json={"prompt": "x"}).text
+        )
+        assert after_activation["checkpoint_id"] == "ckpt-e2e-bad"
+
+        rollback_active_release(session, activated_by="oncall-bob", idempotency_key="e2e-rb-1")
+
+        after_rollback = _done_event_data(
+            client.post("/api/generate/stream", headers=AUTH_HEADERS, json={"prompt": "x"}).text
+        )
+        assert after_rollback["checkpoint_id"] == "ckpt-e2e-good"
