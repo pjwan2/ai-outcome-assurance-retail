@@ -60,6 +60,9 @@ class CaseORM(Base):
         back_populates="case", cascade="all, delete-orphan", order_by="TraceEventORM.sequence"
     )
     agent_runs: Mapped[list[AgentRunORM]] = relationship(back_populates="case", cascade="all, delete-orphan")
+    guardrail_reports: Mapped[list[GuardrailReportORM]] = relationship(
+        back_populates="case", cascade="all, delete-orphan"
+    )
 
 
 class SourceSnapshotORM(Base):
@@ -93,6 +96,7 @@ class EvidenceORM(Base):
     entity_binding_status: Mapped[str] = mapped_column(String, nullable=False)
     support_status: Mapped[str] = mapped_column(String, nullable=False)
     validation_reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+    relevance_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     case: Mapped[CaseORM] = relationship(back_populates="evidence")
 
@@ -288,6 +292,26 @@ class AgentHandoffORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class GuardrailReportORM(Base):
+    """One case run's guardrail record — input findings (PII redactions,
+    categorized injection flags), retrieval relevance scores, and the
+    groundedness-checked case summary. Purely observational: nothing here is
+    read by `_authorise` (app.services.workflow), see
+    docs/adrs/0006-rag-guardrails-are-non-authoritative.md."""
+
+    __tablename__ = "guardrail_reports"
+
+    report_id: Mapped[str] = mapped_column(String, primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False, index=True)
+    input_findings: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    relevance_scores: Mapped[dict] = mapped_column(JSON, default=dict)
+    summary_sentences: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    ungrounded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    case: Mapped[CaseORM] = relationship(back_populates="guardrail_reports")
+
+
 class EvaluationRunORM(Base):
     __tablename__ = "evaluation_runs"
 
@@ -313,6 +337,12 @@ class EvaluationRunORM(Base):
     baseline_evaluation_id: Mapped[str | None] = mapped_column(
         ForeignKey("evaluation_runs.evaluation_id"), nullable=True
     )
+
+    # RAG guardrail metrics (app.guardrails/app.retrieval) — optional/additive,
+    # same reasoning as the enterprise provenance fields above.
+    mean_retrieval_relevance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    groundedness_pass_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pii_redaction_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ReleaseRecordORM(Base):

@@ -4,12 +4,19 @@
 
 - **Secrets from environment only.** `backend/.env.example` has no real values. `DATABASE_URL` is read
   from `os.environ` in `app/db.py`; no secrets are logged or placed in `TraceEvent` fields.
-- **Untrusted-content handling.** Retrieved excerpt text is scanned for injection markers
-  (`app/services/workflow.py::INJECTION_MARKERS`) but the result is only a reason code
-  (`PROMPT_INJECTION_CONTENT`) appended to `Evidence.validation_reasons` — it never changes
-  `authority_status`, `entity_binding_status`, rule outcomes, or the authority decision. Proven by
+- **Untrusted-content handling.** Retrieved excerpt text is scanned for categorized injection markers
+  (`app/guardrails.py::scan_for_injection`, `INJECTION_CATEGORY_MARKERS`) but the result is only a
+  reason code (`PROMPT_INJECTION_CONTENT`) appended to `Evidence.validation_reasons` — it never
+  changes `authority_status`, `entity_binding_status`, rule outcomes, or the authority decision.
+  Proven by
   `tests/test_adversarial.py::test_prompt_injection_content_is_flagged_but_never_changes_authority`
   and by the `EVAL-CP-PROMPT_INJECTION` dataset case.
+- **PII redaction and groundedness-checked generated text.** `app/guardrails.py::redact_pii` masks
+  email/AU-mobile/credit-card-shaped text before it's exposed via the guardrail report; the generated
+  case summary is independently groundedness-checked (`check_groundedness`) and any sentence citing
+  evidence or a claim that doesn't actually exist in the case is replaced with a safe fallback string
+  rather than shown as-is. Neither of these can change a `Claim` or `AuthorityDecision` — see
+  [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md).
 - **Strict tool registry.** `app/tools.py::TOOL_REGISTRY` is a fixed allow-list; every call is validated
   by a Pydantic model with `extra="forbid"`, so unknown tools and unexpected arguments are rejected
   before anything runs (`tests/test_adversarial.py` items 9–10).

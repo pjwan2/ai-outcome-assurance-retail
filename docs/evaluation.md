@@ -25,6 +25,19 @@ assessments).
 Metrics: critical recall, Wilson 95% lower bound on critical recall, false-authorisation count,
 wrong-entity-evidence-admitted count, prompt-injection-altered-decision count, per-slice pass rates.
 
+**RAG guardrail metrics** (`app/retrieval.py`, `app/guardrails.py` — see
+[ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md)), computed the same
+no-hard-coded-numbers way:
+
+- `mean_retrieval_relevance` — the average TF-IDF cosine relevance score across every case's
+  retrieved candidates.
+- `groundedness_pass_rate` — the fraction of cases whose generated case summary has zero ungrounded
+  sentences. Currently 1.0 by construction: the generator only ever cites the `Claim` it was built
+  from (see the ADR for what this number does and does not prove).
+- `pii_redaction_count` — total PII findings (email/AU-mobile/credit-card pattern matches) across the
+  dataset's case text and evidence excerpts; 0 on the current fixtures, which contain no PII by
+  design.
+
 ## Actually reproducing this
 
 ```bash

@@ -21,15 +21,21 @@ without evidence.
    `DETERMINISTIC (offline)`.
 3. **Evidence & Claims**: two admitted sources (Kogan Guarantee, ACCC guidance), both with
    `authority_status=VALID`. Point at `FAULT_ASSESSMENT_AVAILABLE = FALSE` — there is no fault report
-   fixture attached to this case, so the system correctly refuses to guess.
-4. **Review Queue**: show the pending task with reason `MISSING_FAULT_EVIDENCE`. Note there is no
+   fixture attached to this case, so the system correctly refuses to guess. Note the new relevance
+   score column — deterministic TF-IDF cosine similarity against the case, not a raw membership check.
+4. **Guardrails**: the generated case summary — built from typed Claims only, never raw text — with
+   every sentence shown as `GROUNDED`. Explain the guardrail behind it: `check_groundedness`
+   independently re-verifies every citation, and a fabricated one gets replaced, not shown — proven
+   with a hand-constructed violation in `tests/test_guardrails.py`, not just the happy path.
+5. **Review Queue**: show the pending task with reason `MISSING_FAULT_EVIDENCE`. Note there is no
    "approve refund" button anywhere in this demo — only escalation/evidence-request/reject actions.
-5. **Trace & Release**: scroll the trace log — every stage left a row. Click "run release gate": R1
-   (current fixtures) passes; R2 (a fixture with retrieval scope deliberately broken) is blocked with
-   `WRONG_ENTITY_EVIDENCE_ADMITTED`. This is the release gate actually running, not a slide.
-6. Close with the adversarial suite: `pytest -q tests/test_adversarial.py -v` — 16 scenarios including
-   wrong seller, prompt injection, budget exhaustion, and attempted auto-refund while
-   `REQUIRE_HUMAN`, all failing safe.
+6. **Trace & Release**: scroll the trace log — every stage left a row, including the new `GUARDRAILS`
+   entries. Click "run release gate": R1 (current fixtures) passes; R2 (a fixture with retrieval scope
+   deliberately broken) is blocked with `WRONG_ENTITY_EVIDENCE_ADMITTED`. This is the release gate
+   actually running, not a slide.
+7. Close with the adversarial suite: `pytest -q tests/test_adversarial.py tests/test_guardrails.py -v`
+   — wrong seller, prompt injection, budget exhaustion, attempted auto-refund while `REQUIRE_HUMAN`,
+   and a fabricated citation blocked by the groundedness guardrail, all failing safe.
 
 **One-line close:** "Investigation was allowed to be probabilistic. Evidence status, the claim, the
 authority decision, and the refund action were not — those stayed in typed, tested, versioned

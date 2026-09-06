@@ -41,3 +41,15 @@ blocks R2 on every run — this is a property enforced by a passing test, not a 
 `app/evaluation.py::wilson_lower_bound(successes, total)` computes the 95% Wilson score interval lower
 bound. For 24/24, the lower bound is ≈0.862 — meaningfully below the naive 100% observed rate, which is
 the point: a small perfect sample does not guarantee future performance.
+
+## RAG guardrail metrics are not a release-gate input (yet)
+
+`mean_retrieval_relevance`, `groundedness_pass_rate`, and `pii_redaction_count` (see
+`docs/evaluation.md`) are computed and exposed on every evaluation run, but `evaluate_release` does
+not threshold on them. `groundedness_pass_rate` is 1.0 today by construction — the case-summary
+generator is deterministic and template-based, so it cannot currently fail its own groundedness check
+(see [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md)). Gating a release on a metric that
+is vacuously perfect would be exactly the kind of unearned number `docs/interview_evidence.md`'s "What
+must NOT be claimed" section warns against. The honest state is: the metric is wired end to end, and
+the guardrail behind it is independently unit-tested against a hand-constructed violation
+(`backend/tests/test_guardrails.py::test_groundedness_guardrail_blocks_a_fabricated_citation`).

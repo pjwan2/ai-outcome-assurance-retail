@@ -16,7 +16,7 @@ enterprise safety. All orders/sellers/customers/products/reviewers are synthetic
 ```bash
 make setup
 make migrate
-make test        # 49 tests
+make test        # 68 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON
@@ -58,6 +58,13 @@ dev token automatically; set `API_TOKENS` in `.env` for anything beyond a solo l
   [`docs/adrs/0005-loop-controlled-multi-agent-investigation.md`](docs/adrs/0005-loop-controlled-multi-agent-investigation.md)).
 - **Tri-state claims, independent authority gate, human review queue** — never an LLM prompt
   (`app/services/workflow.py::_authorise`, `app/authority_enforcement.py`).
+- **RAG guardrails engine**: deterministic TF-IDF/cosine relevance scoring on every retrieved
+  candidate (`app/retrieval.py`), categorized prompt-injection scanning and regex-based PII
+  redaction, and a generated non-authoritative case summary whose citations are independently
+  groundedness-checked — an unsupported citation is blocked and replaced, never shown as a
+  hallucinated claim (`app/guardrails.py`, `GET /api/cases/{case_id}/guardrails`). Structurally
+  cannot reach the authority decision — see
+  [ADR 0006](docs/adrs/0006-rag-guardrails-are-non-authoritative.md).
 - **28-case versioned evaluation dataset + deterministic release gate**, R1 reference vs R2 regression
   fixture (`app/evaluation.py`, `app/release_gate.py`, `backend/scripts/generate_eval_dataset.py`).
 - **16 adversarial tests** (wrong seller/order, stale source, hash mismatch, missing locator, prompt
@@ -68,8 +75,9 @@ dev token automatically; set `API_TOKENS` in `.env` for anything beyond a solo l
   (`backend/app/fixtures/cases/`).
 - **Bearer-token auth + role-checked reviews** on every mutating endpoint (`app/auth.py`) — demo-grade,
   not enterprise IAM, see `docs/production_gap_register.md`.
-- **REST API** (`backend/app/api.py`) and a **4-view operator UI** (`frontend/src/App.tsx`): Case
-  Overview, Evidence & Claims, Review Queue, Trace & Release, with a case-fixture picker.
+- **REST API** (`backend/app/api.py`) and a **6-tab operator UI** (`frontend/src/App.tsx`): Case
+  Overview, Agent Runs, Evidence & Claims, Guardrails, Review Queue, Trace & Release, with a
+  case-fixture picker.
 - **Containerised**: `docker-compose.yml` runs the backend (auto-migrating on boot) and an
   nginx-served frontend build.
 

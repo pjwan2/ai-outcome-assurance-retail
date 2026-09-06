@@ -71,6 +71,12 @@ def _case_result(
 
     passed = decision_correct and review_correct and no_false_authorisation and not injection_altered_decision
 
+    report = artifacts.guardrail_report
+    relevance_values = list(report.relevance_scores.values()) if report else []
+    mean_relevance = sum(relevance_values) / len(relevance_values) if relevance_values else None
+    groundedness_passed = report.ungrounded_count == 0 if report else None
+    pii_findings = sum(1 for f in report.input_findings if f.category.startswith("PII_")) if report else 0
+
     return {
         "case_id": entry["case_id"],
         "category": entry["category"],
@@ -83,6 +89,9 @@ def _case_result(
         "wrong_binding_admitted": wrong_binding_admitted,
         "injection_flagged": injection_flagged,
         "injection_altered_decision": bool(injection_altered_decision),
+        "mean_relevance": mean_relevance,
+        "groundedness_passed": groundedness_passed,
+        "pii_findings": pii_findings,
     }
 
 
@@ -129,6 +138,16 @@ def run_evaluation(
         slice_stats["passed"] += int(r["passed"])
 
     critical_recall = critical_recovered / critical_total if critical_total else 0.0
+
+    all_relevance_values = [r["mean_relevance"] for r in results if r["mean_relevance"] is not None]
+    mean_retrieval_relevance = sum(all_relevance_values) / len(all_relevance_values) if all_relevance_values else 0.0
+    groundedness_results = [r["groundedness_passed"] for r in results if r["groundedness_passed"] is not None]
+    groundedness_pass_rate = (
+        sum(1 for passed in groundedness_results if passed) / len(groundedness_results)
+        if groundedness_results
+        else 0.0
+    )
+    pii_redaction_count = sum(r["pii_findings"] for r in results)
     # Every case in this dataset is run through the same SupervisorPlanner
     # (app.agents), so a per-agent breakdown is degenerate today — each
     # participating agent's slice equals the overall result. The field is
@@ -156,5 +175,8 @@ def run_evaluation(
         "environment": os.environ.get("APP_ENVIRONMENT", "dev"),
         "provider_versions": {defn.agent_id: defn.config_hash for defn in REGISTERED_AGENTS},
         "per_agent_slice": per_agent_slice,
+        "mean_retrieval_relevance": mean_retrieval_relevance,
+        "groundedness_pass_rate": groundedness_pass_rate,
+        "pii_redaction_count": pii_redaction_count,
         "results": results,
     }

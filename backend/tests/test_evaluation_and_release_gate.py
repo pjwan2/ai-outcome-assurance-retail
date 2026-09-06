@@ -48,3 +48,15 @@ def test_wilson_lower_bound_is_below_observed_rate_for_small_n():
 
 def test_wilson_lower_bound_zero_total_is_zero():
     assert wilson_lower_bound(0, 0) == 0.0
+
+
+def test_rag_guardrail_metrics_are_wired_into_evaluation():
+    """The generator (app.guardrails.generate_case_summary) only ever cites
+    the Claim it was built from, so 1.0 here is expected by construction —
+    not a claim that the guardrail is bulletproof, see
+    docs/interview_evidence.md. This test proves the metric is computed end
+    to end across the full dataset, not just on the hero case."""
+    evaluation = run_evaluation()
+    assert evaluation["groundedness_pass_rate"] == 1.0
+    assert 0.0 <= evaluation["mean_retrieval_relevance"] <= 1.0
+    assert evaluation["pii_redaction_count"] == 0

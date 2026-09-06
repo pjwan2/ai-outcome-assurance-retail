@@ -5,13 +5,21 @@ import {
   AuthorityRecord,
   Claim,
   Evidence,
+  GuardrailReport,
   ReleaseResult,
   ReviewTask,
   TraceEvent,
   CaseSummary,
 } from "./api";
 
-const TABS = ["Case Overview", "Agent Runs", "Evidence & Claims", "Review Queue", "Trace & Release"] as const;
+const TABS = [
+  "Case Overview",
+  "Agent Runs",
+  "Evidence & Claims",
+  "Guardrails",
+  "Review Queue",
+  "Trace & Release",
+] as const;
 type Tab = (typeof TABS)[number];
 
 type Tone = "neutral" | "good" | "warn" | "bad";
@@ -150,6 +158,7 @@ function EvidenceAndClaims({ evidence, claims }: { evidence: Evidence[]; claims:
               <th>Authority</th>
               <th>Entity binding</th>
               <th>Support</th>
+              <th>Relevance</th>
               <th>Reasons</th>
             </tr>
           </thead>
@@ -166,6 +175,15 @@ function EvidenceAndClaims({ evidence, claims }: { evidence: Evidence[]; claims:
                 </td>
                 <td>
                   <Pill tone={e.support_status === "SUPPORTED" ? "good" : "bad"}>{e.support_status}</Pill>
+                </td>
+                <td>
+                  {e.relevance_score === null ? (
+                    <span className="muted">—</span>
+                  ) : (
+                    <Pill tone={e.validation_reasons.includes("LOW_RELEVANCE_RETRIEVAL") ? "warn" : "neutral"}>
+                      {e.relevance_score.toFixed(3)}
+                    </Pill>
+                  )}
                 </td>
                 <td className="muted">{e.validation_reasons.join(", ") || "—"}</td>
               </tr>
@@ -296,6 +314,103 @@ function AgentRuns({ agentRuns }: { agentRuns: AgentRunRecord[] }) {
         — none of it can reach the authority decision (see ADR 0003/0005). Candidates listed here are
         unverified; only the Evidence &amp; Claims tab shows what VALIDATE actually admitted.
       </p>
+    </div>
+  );
+}
+
+function Guardrails({ report }: { report: GuardrailReport | null }) {
+  if (!report) return <Skeleton />;
+  const relevanceEntries = Object.entries(report.relevance_scores);
+  const pillFor = (finding: { category: string }) => (finding.category.startsWith("PII_") ? "warn" : "neutral");
+
+  return (
+    <div>
+      <div className="stat-grid">
+        <div className="stat-tile">
+          <div className="stat-tile-label">Input findings</div>
+          <div className="stat-tile-value">{report.input_findings.length}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="stat-tile-label">Ungrounded statements blocked</div>
+          <div className="stat-tile-value">
+            <Pill tone={report.ungrounded_count === 0 ? "good" : "bad"}>{report.ungrounded_count}</Pill>
+          </div>
+        </div>
+        <div className="stat-tile">
+          <div className="stat-tile-label">Control boundary</div>
+          <div className="stat-tile-value">
+            <Pill tone="neutral">Cannot reach AUTHORISE</Pill>
+          </div>
+        </div>
+      </div>
+
+      <Card
+        title="Input & retrieval findings"
+        hint="prompt-injection categories, PII redactions, TF-IDF relevance — all non-blocking"
+      >
+        {report.input_findings.length === 0 && relevanceEntries.length === 0 && (
+          <p className="empty-state">No guardrail findings for this case.</p>
+        )}
+        {report.input_findings.length > 0 && (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Target</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.input_findings.map((f, i) => (
+                <tr key={`${f.category}-${f.target}-${i}`}>
+                  <td>
+                    <Pill tone={pillFor(f)}>{f.category}</Pill>
+                  </td>
+                  <td className="mono">{f.target}</td>
+                  <td className="muted">{f.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {relevanceEntries.length > 0 && (
+          <table className="data-table" style={{ marginTop: report.input_findings.length > 0 ? 16 : 0 }}>
+            <thead>
+              <tr>
+                <th>Evidence</th>
+                <th>Relevance score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {relevanceEntries.map(([evidenceId, score]) => (
+                <tr key={evidenceId}>
+                  <td className="mono">{evidenceId}</td>
+                  <td className="mono">{score.toFixed(3)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card
+        title="Generated case summary (non-authoritative)"
+        hint="template-based, groundedness-checked — see ADR 0006"
+      >
+        {report.summary_sentences.map((s, i) => (
+          <p key={i} style={{ margin: "0 0 10px", lineHeight: 1.5 }}>
+            <Pill tone={s.grounded ? "good" : "bad"}>{s.grounded ? "GROUNDED" : "BLOCKED"}</Pill>{" "}
+            <span className={s.grounded ? undefined : "muted"} style={s.grounded ? undefined : { fontStyle: "italic" }}>
+              {s.text}
+            </span>
+          </p>
+        ))}
+        <p className="muted" style={{ margin: "10px 0 0" }}>
+          Generated by a deterministic template from typed Claims, never from raw evidence text —
+          every citation above is independently re-verified against the case's real evidence/claims
+          before being shown. A citation that doesn't check out is replaced, not displayed.
+        </p>
+      </Card>
     </div>
   );
 }
@@ -470,6 +585,12 @@ const TAB_ICONS: Record<Tab, React.ReactNode> = {
       <path d="M9 12l2 2 4-4.2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  Guardrails: (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3.5l6.5 2.6v5c0 4.4-2.7 7.9-6.5 9.1-3.8-1.2-6.5-4.7-6.5-9.1v-5L12 3.5z" />
+      <path d="M9.2 12.2l1.9 1.9 3.7-4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
   "Review Queue": (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <circle cx="12" cy="12" r="8.5" />
@@ -497,6 +618,10 @@ const TAB_META: Record<Tab, { eyebrow: string; subtitle: string }> = {
     eyebrow: "Investigation",
     subtitle: "Candidate material separated from verified evidence, and every claim resolved to TRUE, FALSE, or UNKNOWN — never guessed.",
   },
+  Guardrails: {
+    eyebrow: "RAG guardrails",
+    subtitle: "Input scanning, PII redaction, retrieval relevance, and a groundedness-checked case summary — none of it can reach the authority decision.",
+  },
   "Review Queue": {
     eyebrow: "Human-in-the-loop",
     subtitle: "Pending review reasons with evidence/claim/authority context. No refund-approval control exists here by design.",
@@ -515,6 +640,7 @@ export default function App() {
   const [authority, setAuthority] = React.useState<AuthorityRecord[]>([]);
   const [trace, setTrace] = React.useState<TraceEvent[]>([]);
   const [agentRuns, setAgentRuns] = React.useState<AgentRunRecord[]>([]);
+  const [guardrailReport, setGuardrailReport] = React.useState<GuardrailReport | null>(null);
   const [reviews, setReviews] = React.useState<ReviewTask[]>([]);
   const [release, setRelease] = React.useState<ReleaseResult | null>(null);
   const [loadingRelease, setLoadingRelease] = React.useState(false);
@@ -525,13 +651,14 @@ export default function App() {
   const [traceVerified, setTraceVerified] = React.useState<boolean | null>(null);
 
   const loadCaseData = React.useCallback(async (caseId: string) => {
-    const [claimsData, evidenceData, authorityData, traceData, agentRunsData, reviewsData, verifyData] =
+    const [claimsData, evidenceData, authorityData, traceData, agentRunsData, guardrailData, reviewsData, verifyData] =
       await Promise.all([
         api.getClaims(caseId),
         api.getEvidence(caseId),
         api.getAuthority(caseId),
         api.getTrace(caseId),
         api.getAgentRuns(caseId),
+        api.getGuardrails(caseId),
         api.listReviews(),
         api.verifyTrace(caseId),
       ]);
@@ -540,6 +667,7 @@ export default function App() {
     setAuthority(authorityData);
     setTrace(traceData);
     setAgentRuns(agentRunsData);
+    setGuardrailReport(guardrailData);
     setReviews(reviewsData);
     setTraceVerified(verifyData.chain_verified);
   }, []);
@@ -644,6 +772,7 @@ export default function App() {
         {tab === "Case Overview" && <CaseOverview caseSummary={caseSummary} authority={authority} />}
         {tab === "Agent Runs" && <AgentRuns agentRuns={agentRuns} />}
         {tab === "Evidence & Claims" && <EvidenceAndClaims evidence={evidence} claims={claims} />}
+        {tab === "Guardrails" && <Guardrails report={guardrailReport} />}
         {tab === "Review Queue" && (
           <ReviewQueue reviews={reviews} onDecided={() => caseSummary && loadCaseData(caseSummary.case_id)} />
         )}

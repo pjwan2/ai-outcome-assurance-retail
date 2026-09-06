@@ -8,6 +8,7 @@ stale writer can be detected by comparing versions before it commits.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -24,6 +25,7 @@ from app.orm_models import (
     ClaimORM,
     EvaluationRunORM,
     EvidenceORM,
+    GuardrailReportORM,
     OutcomeORM,
     ReleaseRecordORM,
     ReviewTaskORM,
@@ -132,6 +134,7 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
                 entity_binding_status=e.entity_binding_status,
                 support_status=e.support_status,
                 validation_reasons=e.validation_reasons,
+                relevance_score=e.relevance_score,
             )
         )
 
@@ -262,6 +265,20 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
             )
         )
 
+    report = artifacts.guardrail_report
+    if report is not None:
+        session.add(
+            GuardrailReportORM(
+                report_id=report.report_id,
+                case_id=case_id,
+                input_findings=[asdict(f) for f in report.input_findings],
+                relevance_scores=report.relevance_scores,
+                summary_sentences=[asdict(s) for s in report.summary_sentences],
+                ungrounded_count=report.ungrounded_count,
+                created_at=report.generated_at,
+            )
+        )
+
     session.commit()
     return case_row
 
@@ -288,6 +305,9 @@ def persist_evaluation_run(session: Session, evaluation_id: str, evaluation: dic
         provider_versions=evaluation.get("provider_versions"),
         per_agent_slice=evaluation.get("per_agent_slice"),
         baseline_evaluation_id=evaluation.get("baseline_evaluation_id"),
+        mean_retrieval_relevance=evaluation.get("mean_retrieval_relevance"),
+        groundedness_pass_rate=evaluation.get("groundedness_pass_rate"),
+        pii_redaction_count=evaluation.get("pii_redaction_count"),
     )
     session.add(row)
     session.commit()

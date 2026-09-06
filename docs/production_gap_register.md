@@ -12,9 +12,12 @@ mistaken for a production claim.
 | Automatic refunds or other irreversible actions | `AUTO_REFUND_PERMITTED` is hard-coded FALSE, `enforce_action` blocks `AUTO_REFUND`/`ISSUE_REFUND` outside `ALLOW` | Enforced in code and tested (`tests/test_adversarial.py` #16) |
 | Enterprise legal/compliance accreditation | No accreditation process exists | N/A — explicitly out of scope (PRD §2) |
 | Cross-case long-term memory | Each run is independent | No memory store |
-| Production-scale vector infrastructure | Only fixture-backed lexical matching | No embeddings, no vector DB |
+| Production-scale vector infrastructure | Deterministic TF-IDF/cosine relevance scoring exists (`app/retrieval.py`) and is wired into VALIDATE and evaluation, but it is not an ANN index or vector database, and has no embedding model | Real relevance scoring exists; embeddings/vector DB/ANN search do not |
 | Live Anthropic/Google adapters | Not started | `app.tools`/pipeline interfaces are provider-neutral but no live adapter exists |
 | Live OpenAI adapter | Optional per PRD §13/§6, not implemented in this session | Offline deterministic path only |
+| Live LLM-generated explanations | `app/guardrails.py::generate_case_summary` is deterministic, template-based text built from typed Claims — no model call | Groundedness checking is unit-tested against a hand-crafted violation, not against a real model's output |
+| Enterprise PII/DLP classifier | `app/guardrails.py::redact_pii` is three fixed regexes (email, AU mobile, credit-card-shaped digit runs), not a trained classifier | Catches the patterns it's given; no ML-based detection, no locale coverage beyond AU mobile |
+| Maintained red-team/jailbreak corpus | `INJECTION_CATEGORY_MARKERS` is seven substring markers grouped into three categories — the same detection surface the prototype always had | No adversarial corpus, no fuzzing, no coverage measurement against known jailbreak techniques |
 ## Resolved since the previous version of this document
 
 These were listed as gaps before and are now implemented and tested — kept here so the history of
@@ -58,3 +61,11 @@ what changed is visible, not silently dropped:
   OpenAI/Anthropic adapter exists (see the row below). See
   `docs/adrs/0005-loop-controlled-multi-agent-investigation.md` and
   `backend/tests/test_agent_orchestration.py`.
+- **RAG retrieval scoring and a guardrails engine** — `app/retrieval.py` adds deterministic TF-IDF
+  cosine relevance scoring (previously VALIDATE had no ranking signal, only fixture-membership
+  lookup); `app/guardrails.py` adds categorized injection detection, PII redaction, and a
+  groundedness-checked generated case summary. Still bounded the same way as everything else here:
+  `_authorise` is untouched and reads only `claims`, so none of this can influence the authority
+  decision. See `docs/adrs/0006-rag-guardrails-are-non-authoritative.md` and
+  `backend/tests/test_guardrails.py`. This is a partial resolution of the vector-infrastructure row
+  above, not a full one — see that row for what's still missing.

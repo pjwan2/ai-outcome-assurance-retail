@@ -16,15 +16,23 @@ budgets" below and [ADR 0005](adrs/0005-loop-controlled-multi-agent-investigatio
 ```mermaid
 flowchart LR
     CASE[CASE fixture] --> INV[INVESTIGATE\nSupervisor -> Retrieval + Critic agents]
-    INV --> VAL[VALIDATE\nsource authority, entity binding,\nhash, staleness, injection scan]
+    INV --> VAL[VALIDATE\nsource authority, entity binding,\nhash, staleness, injection scan,\nTF-IDF relevance score]
     VAL --> RES[RESOLVE\ndeterministic tri-state claims]
     RES --> AUTH[AUTHORISE\nALLOW / DENY / REQUIRE_HUMAN]
+    RES --> GUARD[GUARDRAILS\nPII redaction, injection categories,\ncase summary + groundedness check]
     AUTH -->|REQUIRE_HUMAN| REVIEW[ReviewTask]
     AUTH --> REC[RECONCILE\nOutcome]
     VAL -.-> TRACE[(TraceEvent log)]
     RES -.-> TRACE
     AUTH -.-> TRACE
+    GUARD -.-> TRACE
 ```
+
+`GUARDRAILS` branches off `RESOLVE` in parallel with `AUTHORISE` — both read `claims`, but only
+`AUTHORISE`'s output is an input to anything else. `GUARDRAILS` is a dead end for control: it produces
+a `GuardrailReport` for the operator, and nothing downstream reads it back into the pipeline. See
+"Retrieval scoring and RAG guardrails" below and
+[ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md).
 
 ## Persistence
 
@@ -80,9 +88,10 @@ evaluation output — see `docs/evaluation.md` and `docs/release_gate.md`.
 
 ## API and UI
 
-FastAPI app in `backend/app/api.py` implements the endpoints in PRD section 14. The React/TypeScript
-UI in `frontend/src/App.tsx` implements the four operator views (Case Overview, Evidence & Claims,
-Review Queue, Trace & Release) as tabs in a single page, calling the API directly. A case-fixture
+FastAPI app in `backend/app/api.py` implements the endpoints in PRD section 14 plus the guardrails
+extensions in [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md). The React/TypeScript UI
+in `frontend/src/App.tsx` implements six operator tabs (Case Overview, Agent Runs, Evidence & Claims,
+Guardrails, Review Queue, Trace & Release) in a single page, calling the API directly. A case-fixture
 picker in the sidebar lets the operator choose which of the four runnable cases to run.
 
 ## Multi-case fixtures
@@ -92,6 +101,29 @@ picker in the sidebar lets the operator choose which of the four runnable cases 
 `backend/app/fixtures/cases/`) and raises `UnknownCaseError` for anything else — there is still no
 free-text case intake, only a larger versioned set of fixtures. `GET /api/case-fixtures` exposes the
 list; `POST /api/cases {"case_id": ...}` runs any of them.
+
+## Retrieval scoring and RAG guardrails
+
+`app/retrieval.py` scores each VALIDATE candidate against a query derived from the case's own fields
+(`build_query`) using deterministic TF-IDF + cosine similarity — pure standard library, no embedding
+model or vector database. Every `Evidence` gets a `relevance_score`; a score below
+`RELEVANCE_THRESHOLD` adds a non-blocking `LOW_RELEVANCE_RETRIEVAL` reason code, the same treatment
+`PROMPT_INJECTION_CONTENT` already gets — it never changes admission or authority.
+
+`app/guardrails.py` adds three checkpoints, orchestrated by `run_guardrails` right after `RESOLVE`:
+categorized prompt-injection scanning (`scan_for_injection`, replacing the old flat marker list with
+no change in blocking behaviour), regex-based PII redaction (`redact_pii`) over the case's free-text
+fields and evidence excerpts, and a generated, non-authoritative case summary
+(`generate_case_summary`) whose citations are independently re-verified by `check_groundedness` —
+a citation to evidence or a claim that doesn't actually exist in the case is the hallucination case,
+and that sentence is replaced with a safe fallback rather than shown as-is. `_authorise`'s signature
+is unchanged by any of this — it still reads only `claims` — so guardrail findings structurally
+cannot reach the authority decision. See [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md)
+for the full design, including a real false positive found and fixed while building the groundedness
+check.
+
+`GET /api/cases/{case_id}/guardrails` exposes the persisted `GuardrailReport`; `GET
+/api/cases/{case_id}/evidence` includes each item's `relevance_score`.
 
 ## Auth boundary
 

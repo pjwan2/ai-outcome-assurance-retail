@@ -68,6 +68,7 @@ class Evidence:
     entity_binding_status: str
     support_status: str
     validation_reasons: list[str] = field(default_factory=list)
+    relevance_score: float | None = None
 
 
 @dataclass
@@ -192,6 +193,50 @@ class AgentStep:
     tool_output_hash: str | None = None
     candidate_evidence_ids: list[str] = field(default_factory=list)
     latency_ms: float | None = None
+
+
+@dataclass
+class GuardrailFinding:
+    """One typed, reason-coded guardrail observation (input-scan or
+    redaction). `blocking=False` for every finding today — guardrails may
+    annotate and redact, never change a Claim or AuthorityDecision (see
+    docs/adrs/0006-rag-guardrails-are-non-authoritative.md)."""
+
+    category: str
+    target: str
+    detail: str
+    blocking: bool = False
+
+
+@dataclass
+class CaseSummarySentence:
+    """One sentence of the generated, non-authoritative case summary.
+    `evidence_ids`/`claim_ids` are the citations the sentence carries *by
+    construction* (the generator is template-based, not free-form) — this is
+    exactly what `check_groundedness` independently re-verifies rather than
+    trusting."""
+
+    text: str
+    evidence_ids: list[str] = field(default_factory=list)
+    claim_ids: list[str] = field(default_factory=list)
+    grounded: bool = True
+
+
+@dataclass
+class GuardrailReport:
+    """The full guardrail record for one case run: input findings (injection
+    categories, PII redactions), retrieval relevance scores keyed by
+    evidence_id, and the groundedness-checked case summary. Persisted and
+    hash-chained into the same TraceEvent chain as everything else — see
+    app.guardrails.run_guardrails."""
+
+    report_id: str
+    case_id: str
+    input_findings: list[GuardrailFinding]
+    relevance_scores: dict[str, float]
+    summary_sentences: list[CaseSummarySentence]
+    ungrounded_count: int
+    generated_at: datetime
 
 
 @dataclass

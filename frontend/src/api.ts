@@ -52,6 +52,7 @@ export interface Evidence {
   entity_binding_status: string;
   support_status: string;
   validation_reasons: string[];
+  relevance_score: number | null;
 }
 
 export interface AuthorityRecord {
@@ -119,6 +120,30 @@ export interface AgentRunRecord {
   steps: AgentStep[];
 }
 
+export interface GuardrailFinding {
+  category: string;
+  target: string;
+  detail: string;
+  blocking: boolean;
+}
+
+export interface CaseSummarySentence {
+  text: string;
+  evidence_ids: string[];
+  claim_ids: string[];
+  grounded: boolean;
+}
+
+export interface GuardrailReport {
+  report_id: string;
+  case_id: string;
+  input_findings: GuardrailFinding[];
+  relevance_scores: Record<string, number>;
+  summary_sentences: CaseSummarySentence[];
+  ungrounded_count: number;
+  created_at: string | null;
+}
+
 export interface ReleaseResult {
   release_id: string;
   config_name: string;
@@ -146,6 +171,7 @@ export const api = {
   getAuthority: (caseId: string) => request<AuthorityRecord[]>(`/api/cases/${caseId}/authority`),
   getTrace: (caseId: string) => request<TraceEvent[]>(`/api/cases/${caseId}/trace`),
   getAgentRuns: (caseId: string) => request<AgentRunRecord[]>(`/api/cases/${caseId}/agent-runs`),
+  getGuardrails: (caseId: string) => request<GuardrailReport>(`/api/cases/${caseId}/guardrails`),
   verifyTrace: (caseId: string) => request<TraceVerifyResult>(`/api/cases/${caseId}/trace/verify`),
   replayCase: (caseId: string) => request<CaseSummary>(`/api/cases/${caseId}/replay`, { method: "POST" }),
   listReviews: () => request<ReviewTask[]>("/api/reviews"),

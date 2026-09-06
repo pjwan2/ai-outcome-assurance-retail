@@ -189,3 +189,28 @@ def test_agent_definitions_and_agent_runs_endpoints(client):
     missing = client.get("/api/cases/CASE-DOES-NOT-EXIST/agent-runs")
     assert missing.status_code == 404
     assert missing.json()["detail"]["error_code"] == "CASE_NOT_FOUND"
+
+
+def test_evidence_endpoint_includes_relevance_score(client):
+    created = client.post("/api/cases", headers=AUTH_HEADERS).json()
+    evidence = client.get(f"/api/cases/{created['case_id']}/evidence").json()
+    assert evidence
+    assert all("relevance_score" in e and isinstance(e["relevance_score"], float) for e in evidence)
+
+
+def test_guardrails_endpoint_returns_report_after_case_run(client):
+    missing = client.get("/api/cases/CASE-DOES-NOT-EXIST/guardrails")
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["error_code"] == "CASE_NOT_FOUND"
+
+    created = client.post("/api/cases", headers=AUTH_HEADERS).json()
+    case_id = created["case_id"]
+
+    report = client.get(f"/api/cases/{case_id}/guardrails")
+    assert report.status_code == 200
+    body = report.json()
+    assert body["case_id"] == case_id
+    assert body["ungrounded_count"] == 0
+    assert body["summary_sentences"]
+    assert all(s["grounded"] for s in body["summary_sentences"])
+    assert isinstance(body["relevance_scores"], dict) and body["relevance_scores"]

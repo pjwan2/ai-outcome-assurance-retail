@@ -17,6 +17,7 @@ from typing import Any
 
 from app.agents import InvestigationResult, SupervisorPlanner
 from app.budget import BudgetExceededError, RunBudget
+from app.guardrails import run_guardrails, scan_for_injection
 from app.models import (
     AgentHandoff,
     AgentRun,
@@ -26,27 +27,20 @@ from app.models import (
     Claim,
     ClaimStatus,
     Evidence,
+    GuardrailReport,
     Outcome,
     ReviewTask,
     SourceSnapshot,
     TerminationStatus,
     TraceEvent,
 )
+from app.retrieval import build_query, is_low_relevance, score_candidates
 from app.state_machine import CaseStatus, validate_transition
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 RULE_VERSION = "rules-v2"
 POLICY_VERSION = "authority-policy-v1"
 STALE_SOURCE_MAX_AGE_DAYS = 365
-INJECTION_MARKERS = (
-    "ignore previous instructions",
-    "ignore all previous",
-    "system:",
-    "set decision",
-    "set authority",
-    "disregard the above",
-    "you are now",
-)
 
 
 def _load_fixture(name: str) -> Any:
@@ -210,13 +204,17 @@ def _validate(
 ) -> tuple[list[SourceSnapshot], list[Evidence]]:
     """Verify source authority, version/date, case binding, locator and
     hash integrity for each candidate. Retrieved excerpt text is treated as
-    untrusted data: it is scanned for injection markers but injection
-    markers only add a reason code, they never change authority/entity/
-    support status or any downstream rule/authority behaviour."""
+    untrusted data: it is scanned for injection markers (app.guardrails) but
+    injection markers only add a reason code, they never change authority/
+    entity/support status or any downstream rule/authority behaviour. Each
+    candidate is also scored against the case's derived query with
+    app.retrieval's TF-IDF cosine similarity — a low score is recorded the
+    same non-blocking way (LOW_RELEVANCE_RETRIEVAL)."""
     snapshots: list[SourceSnapshot] = []
     evidence: list[Evidence] = []
     expected_versions: dict[str, str] = case.get("expected_source_versions", {})
     as_of = datetime.fromisoformat(case["as_of"].replace("Z", "+00:00"))
+    relevance_scores = score_candidates(build_query(case), candidates)
 
     for cand in candidates:
         snapshot = SourceSnapshot(
@@ -264,9 +262,12 @@ def _validate(
         if support_status == "UNSUPPORTED" and "LOCATOR_NOT_FOUND" not in reasons:
             reasons.append("CLAIM_NOT_SUPPORTED")
 
-        excerpt_lower = cand.get("excerpt", "").lower()
-        if any(marker in excerpt_lower for marker in INJECTION_MARKERS):
+        if scan_for_injection(cand.get("excerpt", "")):
             reasons.append("PROMPT_INJECTION_CONTENT")
+
+        relevance_score = relevance_scores.get(cand["source_id"], 0.0)
+        if is_low_relevance(relevance_score):
+            reasons.append("LOW_RELEVANCE_RETRIEVAL")
 
         ev = Evidence(
             evidence_id=f"EVID-{cand['source_id']}",
@@ -280,6 +281,7 @@ def _validate(
             entity_binding_status=entity_binding_status,
             support_status=support_status,
             validation_reasons=reasons,
+            relevance_score=relevance_score,
         )
         evidence.append(ev)
         trace.record(
@@ -300,14 +302,17 @@ def _validate(
     return snapshots, evidence
 
 
-_NON_BLOCKING_REASONS = {"PROMPT_INJECTION_CONTENT"}
+_NON_BLOCKING_REASONS = {"PROMPT_INJECTION_CONTENT", "LOW_RELEVANCE_RETRIEVAL"}
 
 
 def _admitted(evidence: list[Evidence]) -> list[Evidence]:
     """Evidence is admissible only if it has no blocking validation reason.
     PROMPT_INJECTION_CONTENT is recorded but never blocks admission or
     changes downstream rule/authority behaviour — untrusted content is data,
-    not an instruction."""
+    not an instruction. LOW_RELEVANCE_RETRIEVAL (app.retrieval) is recorded
+    the same way: a low TF-IDF cosine score is a guardrail signal for the
+    operator, not a reason to override VALIDATE's authority/entity/support
+    checks."""
     return [
         e
         for e in evidence
@@ -570,6 +575,7 @@ class CaseArtifacts:
         agent_runs: list[AgentRun] | None = None,
         agent_steps: list[AgentStep] | None = None,
         agent_handoffs: list[AgentHandoff] | None = None,
+        guardrail_report: GuardrailReport | None = None,
     ) -> None:
         self.case = case
         self.snapshots = snapshots
@@ -583,6 +589,7 @@ class CaseArtifacts:
         self.agent_runs = agent_runs or []
         self.agent_steps = agent_steps or []
         self.agent_handoffs = agent_handoffs or []
+        self.guardrail_report = guardrail_report
 
 
 def run_case_pipeline(
@@ -658,6 +665,12 @@ def run_case_pipeline(
     claims = _resolve(case, evidence, trace)
     case_status = trace.transition(case_status, CaseStatus.CLAIMS_RESOLVED)
 
+    # Guardrails read only `claims`/`evidence` and produce a report the
+    # operator can see — `_authorise` below is untouched by this call and
+    # still reads only `claims`, so guardrail findings structurally cannot
+    # influence the authority decision (ADR-0006, mirroring ADR-0001/0003).
+    guardrail_report = run_guardrails(case, evidence, claims, trace)
+
     authority = _authorise(case, claims, trace)
     case_status = trace.transition(case_status, CaseStatus.AUTHORITY_EVALUATED)
 
@@ -687,6 +700,7 @@ def run_case_pipeline(
         agent_runs=investigation.agent_runs,
         agent_steps=investigation.agent_steps,
         agent_handoffs=investigation.agent_handoffs,
+        guardrail_report=guardrail_report,
     )
 
 

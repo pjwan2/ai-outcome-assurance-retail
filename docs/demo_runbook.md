@@ -64,9 +64,14 @@ See `docs/demo_script.md` for the talk track. In short:
    review needed, in contrast to the hero case's `REQUIRE_HUMAN`.
 3. **Case Overview** tab — point out `REQUIRE_HUMAN` badge, deterministic-mode badge.
 4. **Evidence & Claims** tab — point out the tri-state claim table, especially
-   `MAJOR_FAILURE_ESTABLISHED = UNKNOWN` and `AUTO_REFUND_PERMITTED = FALSE`.
-5. **Review Queue** tab — make a reviewer decision, show it persists.
-6. **Trace & Release** tab — show the trace log, then click "Run release gate" and show R1 PASS /
+   `MAJOR_FAILURE_ESTABLISHED = UNKNOWN` and `AUTO_REFUND_PERMITTED = FALSE`, and the new relevance
+   score column (TF-IDF cosine similarity per piece of evidence).
+5. **Guardrails** tab — show the generated, non-authoritative case summary and its
+   grounded/blocked sentence badges, plus any input findings (PII redaction, injection categories).
+   Say explicitly that `_authorise` never reads this report — see
+   [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md).
+6. **Review Queue** tab — make a reviewer decision, show it persists.
+7. **Trace & Release** tab — show the trace log, then click "Run release gate" and show R1 PASS /
    R2 BLOCK side by side.
-7. Run `pytest -q tests/test_adversarial.py -v` live to show wrong-seller / prompt-injection /
-   budget-exhaustion tests passing.
+8. Run `pytest -q tests/test_adversarial.py tests/test_guardrails.py -v` live to show wrong-seller /
+   prompt-injection / budget-exhaustion / groundedness-guardrail tests passing.

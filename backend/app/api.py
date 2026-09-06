@@ -15,7 +15,7 @@ from app.auth import Principal, require_auth
 from app.db import Base, SessionLocal, engine
 from app.evaluation import run_evaluation
 from app.models import TraceEvent
-from app.orm_models import AgentRunORM, CaseORM, ReviewTaskORM
+from app.orm_models import AgentRunORM, CaseORM, GuardrailReportORM, ReviewTaskORM
 from app.persistence import (
     persist_case_run,
     persist_evaluation_run,
@@ -164,6 +164,7 @@ def get_case_evidence(case_id: str, db: Session = Depends(get_db)) -> list[dict]
             "entity_binding_status": e.entity_binding_status,
             "support_status": e.support_status,
             "validation_reasons": e.validation_reasons,
+            "relevance_score": e.relevance_score,
         }
         for e in case.evidence
     ]
@@ -314,6 +315,34 @@ def get_case_agent_runs(case_id: str, db: Session = Depends(get_db)) -> list[dic
     ]
 
 
+@app.get("/api/cases/{case_id}/guardrails")
+def get_case_guardrail_report(case_id: str, db: Session = Depends(get_db)) -> dict:
+    """The most recent GuardrailReport for this case (app.guardrails): input
+    findings (categorized injection flags, PII redactions), per-evidence
+    retrieval relevance scores, and the groundedness-checked case summary.
+    Purely observational — see docs/adrs/0006-rag-guardrails-are-non-authoritative.md."""
+    case = db.get(CaseORM, case_id)
+    if case is None:
+        raise _error(404, "CASE_NOT_FOUND", f"No case with id {case_id}")
+    report = (
+        db.query(GuardrailReportORM)
+        .filter_by(case_id=case_id)
+        .order_by(GuardrailReportORM.created_at.desc())
+        .first()
+    )
+    if report is None:
+        raise _error(404, "GUARDRAIL_REPORT_NOT_FOUND", f"No guardrail report for case {case_id}")
+    return {
+        "report_id": report.report_id,
+        "case_id": report.case_id,
+        "input_findings": report.input_findings,
+        "relevance_scores": report.relevance_scores,
+        "summary_sentences": report.summary_sentences,
+        "ungrounded_count": report.ungrounded_count,
+        "created_at": report.created_at.isoformat() if report.created_at else None,
+    }
+
+
 @app.post("/api/cases/{case_id}/replay")
 def replay_case(
     case_id: str, db: Session = Depends(get_db), principal: Principal = Depends(require_auth)
@@ -426,6 +455,9 @@ def get_evaluation(evaluation_id: str, db: Session = Depends(get_db)) -> dict:
         "provider_versions": row.provider_versions,
         "per_agent_slice": row.per_agent_slice,
         "baseline_evaluation_id": row.baseline_evaluation_id,
+        "mean_retrieval_relevance": row.mean_retrieval_relevance,
+        "groundedness_pass_rate": row.groundedness_pass_rate,
+        "pii_redaction_count": row.pii_redaction_count,
     }
 
 
