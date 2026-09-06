@@ -1,7 +1,7 @@
 """initial control chain schema
 
 Revision ID: 8b19fad92700
-Revises: 
+Revises:
 Create Date: 2026-08-07 16:56:07.224541
 
 """

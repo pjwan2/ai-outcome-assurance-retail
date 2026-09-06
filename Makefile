@@ -1,4 +1,4 @@
-.PHONY: setup migrate seed test lint typecheck eval demo-reset demo-smoke
+.PHONY: setup migrate seed test lint typecheck eval demo-reset demo-smoke check
 
 setup:
 	cd backend && python -m pip install -r requirements-dev.txt
@@ -27,3 +27,10 @@ demo-reset:
 
 demo-smoke:
 	cd backend && python scripts/demo_smoke.py
+
+# Mirrors what CI (.github/workflows/ci.yml) actually runs, in one local
+# command — a convenience for catching a failure before pushing, not a
+# substitute for CI: this can be skipped locally, CI on `master` cannot
+# (branch protection requires it to pass before a PR can merge).
+check: lint typecheck test
+	cd frontend && npx tsc --noEmit && npm run build
