@@ -1,6 +1,13 @@
 # Limitations
 
-This is an interview-grade vertical slice, not a production system. Specifically:
+This is an engineering prototype — a vertical slice, not a production system. Specifically:
+
+- **No document-level read permissions, structure-aware ingestion, or reranking.** Evidence comes from
+  small, pre-authored JSON fixtures, not real ingested documents; retrieval is one TF-IDF cosine score
+  per candidate with no second-stage reranker; and every `GET` endpoint is unauthenticated (see
+  `docs/security.md`, `docs/production_gap_register.md`). If any of these are referenced elsewhere
+  (a resume, a cover letter), that describes separate work, not this codebase — see
+  `docs/verification_matrix.md`'s "Scope of this public repository".
 
 - **Four fixture cases, not free-text intake.** `GET /api/case-fixtures` lists the runnable cases
   (`CASE-RET-001..004`); `POST /api/cases` can run any of them, but there is still no way to submit an

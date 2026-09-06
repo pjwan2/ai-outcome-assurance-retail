@@ -5,10 +5,11 @@ summary.
 Every check here is read-only with respect to the control chain: it can
 annotate, redact, or replace text, but it never receives — and therefore
 structurally cannot influence — a `Claim` or `AuthorityDecision`
-(`app/services/workflow.py::_authorise` reads only `claims`, never this
+(`app/services/authorise.py::authorise_case` reads only `claims`, never this
 module's output). See docs/adrs/0006-rag-guardrails-are-non-authoritative.md.
 
-`app/services/workflow.py::_validate` already had a flat `INJECTION_MARKERS`
+`app/services/validate.py::validate_evidence` (formerly `workflow.py::_validate`, before that module
+was split up) already had a flat `INJECTION_MARKERS`
 substring scan producing a single `PROMPT_INJECTION_CONTENT` reason code;
 `scan_for_injection` below is a drop-in replacement that additionally
 categorizes *which* pattern matched, without changing which excerpts get
@@ -33,8 +34,8 @@ INJECTION_CATEGORY_MARKERS: dict[str, tuple[str, ...]] = {
 def scan_for_injection(text: str) -> list[str]:
     """Return every injection category whose marker(s) appear in `text`.
     Non-blocking by itself — the caller decides what, if anything, a match
-    means (in `_validate`, it sets one PROMPT_INJECTION_CONTENT reason code
-    regardless of how many categories matched)."""
+    means (in `validate_evidence`, it sets one PROMPT_INJECTION_CONTENT
+    reason code regardless of how many categories matched)."""
     lowered = text.lower()
     return [category for category, markers in INJECTION_CATEGORY_MARKERS.items() if any(m in lowered for m in markers)]
 
@@ -105,8 +106,8 @@ def check_groundedness(
     marked `grounded=False`, rather than shown as-is.
 
     Deliberately checked against every validated `Evidence`, not only the
-    *admitted* subset: `_resolve`'s `MAJOR_FAILURE_ESTABLISHED` claim (see
-    app/services/workflow.py) legitimately cites evidence excluded from
+    *admitted* subset: `resolve_claims`'s `MAJOR_FAILURE_ESTABLISHED` claim
+    (see app/services/resolve.py) legitimately cites evidence excluded from
     `admitted` by a `CONTRADICTION_PRESENT` reason code, precisely so the
     summary can name which sources disagree — that is correct audit
     behaviour, not a hallucination, and an earlier version of this guardrail
@@ -140,9 +141,9 @@ def check_groundedness(
 
 
 class GuardrailTraceRecorder(Protocol):
-    """Structural match for `app.services.workflow._TraceRecorder.record` —
+    """Structural match for `app.services.trace.TraceRecorder.record` —
     identical shape to `app.agents.TraceRecorder`, redeclared here so this
-    module has no import dependency on either workflow.py or agents.py."""
+    module has no import dependency on either app.services or app.agents."""
 
     def record(
         self,
@@ -166,10 +167,11 @@ def run_guardrails(
 
     - input: PII scan over the case's own free-text fields and every
       evidence excerpt (redaction only — never blocks admission, that
-      remains `_validate`/`_admitted`'s job per ADR-0001).
-    - retrieval: surfaces the relevance score `_validate` already attached
-      to each Evidence (app.retrieval.score_candidates) — nothing new to
-      compute here.
+      remains `validate_evidence`/`admitted_evidence`'s job per ADR-0001,
+      app/services/validate.py).
+    - retrieval: surfaces the relevance score `validate_evidence` already
+      attached to each Evidence (app.retrieval.score_candidates) — nothing
+      new to compute here.
     - output: generates the non-authoritative case summary and independently
       groundedness-checks it before it is fit to expose via the API/UI.
     """
@@ -195,7 +197,7 @@ def run_guardrails(
                 GuardrailFinding(
                     category=f"INJECTION_{category}",
                     target=e.evidence_id,
-                    detail="Flagged; non-blocking and cannot alter authority (see _NON_BLOCKING_REASONS)",
+                    detail="Flagged; non-blocking and cannot alter authority (see validate.py::NON_BLOCKING_REASONS)",
                 )
             )
         _, pii_categories = redact_pii(e.excerpt)

@@ -11,12 +11,31 @@ Independent public-retail prototype. Not legal advice, not a production deployme
 enterprise safety. All orders/sellers/customers/products/reviewers are synthetic. See
 [`docs/limitations.md`](docs/limitations.md) and [`docs/production_gap_register.md`](docs/production_gap_register.md).
 
+![Guardrails tab, real data, captured against the Docker-built app](docs/screenshots/guardrails.png)
+
+More screenshots (all six tabs, captured with Playwright against the actual Docker-built frontend
+talking to the actual Docker-built backend, not mocked): [`docs/screenshots/`](docs/screenshots/).
+
+```mermaid
+flowchart LR
+    UI[Operator UI\nreact, 6 tabs] -->|REST + SSE| API[FastAPI\nbackend/app/api.py]
+    API --> PIPE[Case pipeline\nCASE to RECONCILE]
+    API --> SERVE[Serving slice\nasync, SSE, backpressure]
+    PIPE --> DB[(SQLite\nSQLAlchemy + Alembic)]
+    PIPE -.-> GUARD[Guardrails\nnon-authoritative]
+    SERVE --> MODEL[Deterministic fake model]
+    SERVE --> METRICS[/Prometheus metrics/]
+```
+
+Full architecture, including the control-boundary diagram (why the model never owns authority): see
+[`docs/architecture.md`](docs/architecture.md).
+
 ## Quickstart
 
 ```bash
 make setup
 make migrate
-make test        # 68 tests
+make test        # 81 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON
@@ -57,7 +76,7 @@ dev token automatically; set `API_TOKENS` in `.env` for anything beyond a solo l
   agent confined to `INVESTIGATE`; `AUTHORISE` stays plain Python (see
   [`docs/adrs/0005-loop-controlled-multi-agent-investigation.md`](docs/adrs/0005-loop-controlled-multi-agent-investigation.md)).
 - **Tri-state claims, independent authority gate, human review queue** — never an LLM prompt
-  (`app/services/workflow.py::_authorise`, `app/authority_enforcement.py`).
+  (`app/services/authorise.py::authorise_case`, `app/authority_enforcement.py`).
 - **RAG guardrails engine**: deterministic TF-IDF/cosine relevance scoring on every retrieved
   candidate (`app/retrieval.py`), categorized prompt-injection scanning and regex-based PII
   redaction, and a generated non-authoritative case summary whose citations are independently
@@ -79,7 +98,16 @@ dev token automatically; set `API_TOKENS` in `.env` for anything beyond a solo l
   Overview, Agent Runs, Evidence & Claims, Guardrails, Review Queue, Trace & Release, with a
   case-fixture picker.
 - **Containerised**: `docker-compose.yml` runs the backend (auto-migrating on boot) and an
-  nginx-served frontend build.
+  nginx-served frontend build. Both containers run as unprivileged users, not root.
+- **Model-serving slice** (`backend/app/serving/`, independent of the case-assurance pipeline above):
+  `POST /api/generate/stream` streams a deterministic fake model's output over SSE with a real
+  request/session ID, per-request timeout, client-disconnect detection that releases its concurrency
+  slot, bounded in-flight concurrency + a bounded wait queue (HTTP 503 backpressure once both are
+  full), a per-session token-bucket rate limiter (HTTP 429), `tenacity`-based retry on transient
+  pre-stream failures with a graceful terminal SSE error on exhaustion or a mid-stream failure,
+  model/checkpoint version on every response, structured JSON logs, and Prometheus metrics at
+  `GET /metrics`. No live model call anywhere — see `docs/production_gap_register.md`. Load-tested with
+  Locust at 10/50/100 concurrent users — see [`docs/performance_report.md`](docs/performance_report.md).
 
 Full docs: [`docs/architecture.md`](docs/architecture.md) ·
 [`docs/demo_runbook.md`](docs/demo_runbook.md) ·
@@ -87,4 +115,15 @@ Full docs: [`docs/architecture.md`](docs/architecture.md) ·
 [`docs/evaluation.md`](docs/evaluation.md) ·
 [`docs/release_gate.md`](docs/release_gate.md) ·
 [`docs/security.md`](docs/security.md) ·
-[`docs/interview_evidence.md`](docs/interview_evidence.md).
+[`docs/verification_matrix.md`](docs/verification_matrix.md).
+
+## Scope and development process
+
+This is a reduced, public engineering prototype, not the entirety of any contributor's work — see
+[`docs/verification_matrix.md`](docs/verification_matrix.md)'s "Scope of this public repository" before
+comparing it against anything else (a resume, a different codebase). Built with Claude Code throughout;
+every commit's `Co-Authored-By: Claude Sonnet 5` trailer in `git log` is a real, unedited record of
+that, not an assertion made here. Architecture decisions, acceptance criteria, test design, debugging,
+and final verification of every claim in this repository's docs are the author's own responsibility —
+see [`docs/development_provenance.md`](docs/development_provenance.md) for the original development
+brief and a fuller account of what that division of labor means.

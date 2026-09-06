@@ -9,13 +9,13 @@ like "is this a major failure," guessing FALSE when there is no fault assessment
 possibly-valid refund; guessing TRUE would silently approve escalation without evidence.
 
 ## Decision
-`ClaimStatus` (`app/models.py`) is `TRUE | FALSE | UNKNOWN`. `_resolve`
-(`app/services/workflow.py`) only returns TRUE/FALSE when admitted evidence actually supports that
+`ClaimStatus` (`app/models.py`) is `TRUE | FALSE | UNKNOWN`. `resolve_claims`
+(`app/services/resolve.py`) only returns TRUE/FALSE when admitted evidence actually supports that
 conclusion; absence of evidence or contradictory admitted evidence (`CONTRADICTION_PRESENT`) both
 resolve to UNKNOWN, never to a default.
 
 ## Consequences
 `MAJOR_FAILURE_ESTABLISHED = UNKNOWN` in the hero case is the intended, tested outcome
 (`tests/test_workflow.py`), not a bug. UNKNOWN claims route to human review
-(`_authorise`: `major_failure == ClaimStatus.UNKNOWN` → `REQUIRE_HUMAN`), so uncertainty is
+(`authorise_case`: `major_failure == ClaimStatus.UNKNOWN` → `REQUIRE_HUMAN`), so uncertainty is
 operationalised rather than hidden.

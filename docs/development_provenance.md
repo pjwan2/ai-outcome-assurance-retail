@@ -1,3 +1,23 @@
+# Development provenance
+
+This file is the original development brief given to Claude Code to bootstrap this repository's
+initial vertical slice, kept verbatim below (not rewritten after the fact) as a transparent record of
+how the work was scoped at the start. It is historical, not a live specification — later work (see
+`docs/adrs/`) extended the system well past what's described here, and a few cross-references inside
+the brief (e.g. to a file once called `docs/interview_evidence.md`) point at files that have since been
+renamed; the current one is `docs/verification_matrix.md`.
+
+**On AI-assisted development**: this repository was built with Claude Code throughout, and that is
+disclosed openly rather than left implicit — every commit in `git log` carries a real
+`Co-Authored-By: Claude Sonnet 5` trailer, a verifiable record, not an assertion made here. What that
+does and doesn't mean: architecture decisions, acceptance criteria, test design, debugging, and final
+verification of every claim in `docs/verification_matrix.md` are the author's own responsibility, not
+generated or rubber-stamped. The brief below describes what was *asked for*; the commit history, tests,
+and ADRs describe what was actually built, checked, and — in at least one documented case
+([ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md)) — found wrong and fixed.
+
+---
+
 # AI Outcome Assurance
 ## Claude Code Implementation Prompt — Runnable Public-Retail Vertical Slice
 

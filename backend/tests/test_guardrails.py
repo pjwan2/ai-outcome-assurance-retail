@@ -84,8 +84,9 @@ def test_scan_for_injection_returns_empty_for_clean_text():
 
 def test_injection_still_sets_prompt_injection_content_reason_code():
     """Regression: app.guardrails.scan_for_injection replaced the old flat
-    INJECTION_MARKERS tuple in _validate. The blocking behaviour (there is
-    none — it's non-blocking) must be identical to before."""
+    INJECTION_MARKERS tuple in validate_evidence (app/services/validate.py).
+    The blocking behaviour (there is none — it's non-blocking) must be
+    identical to before."""
     case = _case("GR-INJ-01", ["SRC-INJECTION", "SRC-ACCC-RIGHTS"])
     artifacts = run_case_pipeline(case, _sources_for(case["source_refs"]))
     injected = next(e for e in artifacts.evidence if e.source_id == "SRC-INJECTION")
@@ -152,9 +153,9 @@ def test_hero_case_summary_is_fully_grounded():
 
 def test_contradiction_case_counter_evidence_citation_is_grounded_not_hallucinated():
     """Regression for a real false positive found while building this
-    guardrail: `_resolve`'s MAJOR_FAILURE_ESTABLISHED claim legitimately
+    guardrail: `resolve_claims`'s MAJOR_FAILURE_ESTABLISHED claim legitimately
     cites evidence excluded from the *admitted* set by CONTRADICTION_PRESENT
-    (see app/services/workflow.py), so groundedness must be checked against
+    (see app/services/resolve.py), so groundedness must be checked against
     every validated Evidence, not only the admitted subset — otherwise this
     case's own summary would wrongly flag itself as ungrounded."""
     case = _case(
@@ -171,7 +172,7 @@ def test_contradiction_case_counter_evidence_citation_is_grounded_not_hallucinat
 
 
 def test_guardrail_report_never_changes_authority_decision():
-    """`_authorise` (app/services/workflow.py) only ever reads `claims` — the
+    """`authorise_case` (app/services/authorise.py) only ever reads `claims` — the
     guardrail step runs before it in the pipeline but is not one of its
     arguments, so its presence cannot change the hero case's known-correct
     authority decision. Mirrors the boundary

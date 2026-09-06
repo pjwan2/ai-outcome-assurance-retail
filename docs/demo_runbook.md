@@ -68,7 +68,7 @@ See `docs/demo_script.md` for the talk track. In short:
    score column (TF-IDF cosine similarity per piece of evidence).
 5. **Guardrails** tab — show the generated, non-authoritative case summary and its
    grounded/blocked sentence badges, plus any input findings (PII redaction, injection categories).
-   Say explicitly that `_authorise` never reads this report — see
+   Say explicitly that `authorise_case` never reads this report — see
    [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md).
 6. **Review Queue** tab — make a reviewer decision, show it persists.
 7. **Trace & Release** tab — show the trace log, then click "Run release gate" and show R1 PASS /

@@ -1,17 +1,28 @@
-# Interview evidence
+# Verification matrix
 
 No self-assessed seniority claims below — only what is runnable and where.
+
+## Scope of this public repository
+
+This repository is a reduced, public vertical slice, not the entirety of any author's work. If a
+resume, cover letter, or conversation references a broader prototype — a larger test suite, structure-
+aware document ingestion, a reranking stage, document-owner/scope metadata, or document-level
+read-permission enforcement — that describes earlier or separate work, and none of it is reproduced in
+this codebase. Nothing in this repository should be read as evidence for those specific capabilities.
+This repository's own, independently reproducible count is whatever `make test` / `pytest -q` prints
+right now (`backend/tests/`) — currently 81 passing tests — never a number quoted from memory. See
+`docs/production_gap_register.md` for the maintained list of what this repository does not implement.
 
 ## IMPLEMENTED AND VERIFIED
 
 | Claim | Evidence | Reproduce |
 |---|---|---|
-| Typed tri-state claims (TRUE/FALSE/UNKNOWN) | `backend/app/models.py::ClaimStatus`, `app/services/workflow.py::_resolve` | `pytest tests/test_workflow.py` |
-| Independent, deterministic authority gate (no LLM) | `app/services/workflow.py::_authorise`, `app/authority_enforcement.py::enforce_action` | `pytest tests/test_adversarial.py::test_auto_refund_blocked_when_authority_requires_human` |
+| Typed tri-state claims (TRUE/FALSE/UNKNOWN) | `backend/app/models.py::ClaimStatus`, `app/services/resolve.py::resolve_claims` | `pytest tests/test_workflow.py` |
+| Independent, deterministic authority gate (no LLM) | `app/services/authorise.py::authorise_case`, `app/authority_enforcement.py::enforce_action` | `pytest tests/test_adversarial.py::test_auto_refund_blocked_when_authority_requires_human` |
 | SQLAlchemy 2 schema + Alembic migrations | `app/orm_models.py`, `backend/alembic/versions/*.py` | `python -m alembic upgrade head` |
 | Optimistic state versioning | `app/persistence.py::persist_case_run` increments `Case.state_version` | `pytest tests/test_persistence.py::test_persist_case_run_is_replayable_and_bumps_state_version` |
-| Evidence validators with reason codes | `app/services/workflow.py::_validate` (SOURCE_NOT_ALLOWED, WRONG_*_BINDING, SOURCE_VERSION_MISMATCH, SOURCE_STALE_OR_OUT_OF_TIME, HASH_MISMATCH, LOCATOR_NOT_FOUND, CLAIM_NOT_SUPPORTED, CONTRADICTION_PRESENT, PROMPT_INJECTION_CONTENT) | `pytest tests/test_adversarial.py` |
-| Prompt injection cannot alter authority | `app/guardrails.py::scan_for_injection` (categorized, called from `_validate`); injection only adds a reason code | `pytest tests/test_adversarial.py::test_prompt_injection_content_is_flagged_but_never_changes_authority` |
+| Evidence validators with reason codes | `app/services/validate.py::validate_evidence` (SOURCE_NOT_ALLOWED, WRONG_*_BINDING, SOURCE_VERSION_MISMATCH, SOURCE_STALE_OR_OUT_OF_TIME, HASH_MISMATCH, LOCATOR_NOT_FOUND, CLAIM_NOT_SUPPORTED, CONTRADICTION_PRESENT, PROMPT_INJECTION_CONTENT) | `pytest tests/test_adversarial.py` |
+| Prompt injection cannot alter authority | `app/guardrails.py::scan_for_injection` (categorized, called from `validate_evidence`); injection only adds a reason code | `pytest tests/test_adversarial.py::test_prompt_injection_content_is_flagged_but_never_changes_authority` |
 | Governed tool registry, unknown-tool/extra-arg rejection | `app/tools.py` | `pytest tests/test_adversarial.py -k tool` |
 | Budgeted runs, typed CONTROL_BLOCKED termination | `app/budget.py`, `run_case_pipeline` | `pytest tests/test_adversarial.py::test_budget_exhaustion_produces_control_blocked_termination` |
 | Idempotent review decisions | `app/reviews.py::decide_review` | `pytest tests/test_adversarial.py -k review` |
@@ -21,11 +32,15 @@ No self-assessed seniority claims below — only what is runnable and where.
 | Wilson 95% lower bound on critical recall | `app/evaluation.py::wilson_lower_bound` | `pytest tests/test_evaluation_and_release_gate.py::test_wilson_lower_bound_is_below_observed_rate_for_small_n` |
 | REST API covering PRD §14 endpoints | `backend/app/api.py` | `pytest tests/test_api.py` |
 | Operator UI — 6 tabs (Case Overview, Agent Runs, Evidence & Claims, Guardrails, Review Queue, Trace & Release) | `frontend/src/App.tsx` | `npm run dev`, verified: `tsc --noEmit` clean, `npm run build` succeeds, dev server serves the app against a live backend |
-| `CaseStatus` state machine actually enforced, not just defined | `app/state_machine.py::validate_transition`, called from `run_case_pipeline` via `_TraceRecorder.transition` | `pytest tests/test_trace_chain.py::test_state_transitions_are_recorded_and_valid` |
-| `TraceEvent` SHA-256 hash chain (tamper/reorder detection) | `app/services/workflow.py::_TraceRecorder`, `verify_trace_chain()` | `pytest tests/test_trace_chain.py`, `GET /api/cases/{case_id}/trace/verify` |
-| Counter-evidence linked on contradictory claims | `app/services/workflow.py::_resolve` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
+| `CaseStatus` state machine actually enforced, not just defined | `app/state_machine.py::validate_transition`, called from `run_case_pipeline` via `app/services/trace.py::TraceRecorder.transition` | `pytest tests/test_trace_chain.py::test_state_transitions_are_recorded_and_valid` |
+| `TraceEvent` SHA-256 hash chain (tamper/reorder detection) | `app/services/trace.py::TraceRecorder`, `verify_trace_chain()` | `pytest tests/test_trace_chain.py`, `GET /api/cases/{case_id}/trace/verify` |
+| Counter-evidence linked on contradictory claims | `app/services/resolve.py::resolve_claims` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
 | Ruff + mypy clean | — | `make lint`, `make typecheck` |
-| 68 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| 81 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| Model-serving slice: async SSE streaming, timeout, client-disconnect releases its concurrency slot, bounded concurrency/backpressure (503), per-session rate limiting (429), retry-then-graceful-failure on both pre-stream and mid-stream backend errors, model/checkpoint version on every response | `app/serving/` (`model_backend.py`, `concurrency.py`, `rate_limit.py`, `streaming.py`, `router.py`) | `pytest tests/test_serving.py` (13 tests) |
+| Structured JSON logs and Prometheus metrics for the serving slice, exposed over real HTTP | `app/serving/logging_utils.py`, `app/serving/metrics.py`, `GET /metrics` | `pytest tests/test_serving.py -k "metrics or structured_log"` |
+| No live model call anywhere in the serving slice — a deterministic, hash-seeded fake model | `app/serving/model_backend.py::DeterministicFakeModel` | `pytest tests/test_serving.py::test_repeated_prompt_is_deterministic` |
+| Dependency vulnerabilities found and fixed, not just scanned: `pip-audit` surfaced 7 CVEs against the previously-resolved `starlette==0.50.0`; fixed by pairing `fastapi==0.141.1` with `starlette==1.6.0` (the first fastapi release with no `starlette<0.51` ceiling), full suite re-verified green after | `backend/requirements.txt`, `docs/security.md` | `pip-audit -r requirements.txt` → "No known vulnerabilities found" |
 | Loop-controlled agent runs: persisted budget consumption and step-by-step audit trail, not just an in-memory counter | `app/budget.py::RunBudget.tool_calls_used/steps_used`, `app/agents.py`, `app/orm_models.py::AgentRunORM/AgentStepORM` | `pytest tests/test_agent_orchestration.py::test_investigate_produces_supervisor_and_two_child_agent_runs` |
 | Bounded multi-agent delegation (Supervisor → Retrieval + Critic agents), INVESTIGATE-only boundary enforced by a database CheckConstraint, not just application code | `app/agents.py::SupervisorPlanner`, `AgentRunORM` (`ck_agent_run_stage_investigate_only`) | `pytest tests/test_agent_orchestration.py::test_agent_run_stage_is_constrained_to_investigate_at_the_db_level` |
 | A CONTROL_BLOCKED (budget-exhausted) run still leaves an auditable partial agent-run record, not a silent failure | `app/agents.py::InvestigationBudgetExceeded` | `pytest tests/test_agent_orchestration.py::test_control_blocked_run_still_persists_partial_agent_runs` |
@@ -35,16 +50,17 @@ No self-assessed seniority claims below — only what is runnable and where.
 | CI passing on GitHub Actions (backend + frontend) | `.github/workflows/ci.yml` | https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354 — both jobs green |
 | Four runnable fixture cases, `case_id` actually respected | `app/fixtures/cases/CASE-RET-00{2,3,4}.json`, `app/services/workflow.py::load_case_fixture` | `pytest tests/test_api.py::test_list_case_fixtures_and_run_a_non_hero_case` |
 | Bearer-token auth + role-checked review decisions | `app/auth.py::require_auth`, `app/api.py::post_review_decision` | `pytest tests/test_api.py::test_create_case_requires_auth`, `::test_wrong_role_cannot_decide_review` |
-| Docker build + run verified end-to-end (not just written) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` | `docker compose up --build`, then `curl localhost:8000/health` |
-| Deterministic TF-IDF + cosine relevance scoring on every retrieved candidate (no embedding model/vector DB) | `app/retrieval.py::score_candidates`, wired into `app/services/workflow.py::_validate` | `pytest tests/test_retrieval.py` |
-| Low-relevance retrieval flagged but non-blocking, same treatment as prompt injection | `app/services/workflow.py::_NON_BLOCKING_REASONS` | `pytest tests/test_guardrails.py::test_low_relevance_is_flagged_but_never_blocks_admission` |
+| Docker build + run verified end-to-end (not just written) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` | `docker compose up --build`, then `curl localhost:8000/health`. Actually executed: both images built, backend ran its Alembic migration on boot (log confirms all 5 revisions applying), `/health` returned `{"status":"ok"}`, `POST /api/cases` created the hero case, `GET /api/cases/CASE-RET-001/trace/verify` returned `chain_verified: true` (28 events), `GET /api/cases/CASE-RET-001/guardrails` returned a populated report, and the frontend container served the built SPA with HTTP 200 — all against the running containers, not assumed |
+| Deterministic TF-IDF + cosine relevance scoring on every retrieved candidate (no embedding model/vector DB) | `app/retrieval.py::score_candidates`, wired into `app/services/validate.py::validate_evidence` | `pytest tests/test_retrieval.py` |
+| Low-relevance retrieval flagged but non-blocking, same treatment as prompt injection | `app/services/validate.py::NON_BLOCKING_REASONS` | `pytest tests/test_guardrails.py::test_low_relevance_is_flagged_but_never_blocks_admission` |
 | Categorized prompt-injection detection (was a flat marker list) | `app/guardrails.py::scan_for_injection`, `INJECTION_CATEGORY_MARKERS` | `pytest tests/test_guardrails.py::test_scan_for_injection_categorizes_instruction_override` |
 | Regex-based PII detection and redaction (email/AU-mobile/credit-card) applied to case text and evidence excerpts | `app/guardrails.py::redact_pii` | `pytest tests/test_guardrails.py -k redact_pii` |
 | Generated, non-authoritative case summary with independent groundedness ("hallucination") check — a fabricated citation is blocked and replaced, proven with a hand-constructed violation | `app/guardrails.py::generate_case_summary`, `check_groundedness` | `pytest tests/test_guardrails.py::test_groundedness_guardrail_blocks_a_fabricated_citation` |
 | Groundedness checked against the case's real evidence, not only the *admitted* subset — a real false positive on contradiction cases found and fixed by running the full eval dataset | `app/guardrails.py::check_groundedness` docstring, [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md) | `pytest tests/test_guardrails.py::test_contradiction_case_counter_evidence_citation_is_grounded_not_hallucinated` |
-| Guardrail engine cannot reach the authority decision — `_authorise`'s signature is unchanged | `app/services/workflow.py::run_case_pipeline` calls `run_guardrails` before `_authorise`, which still reads only `claims` | `pytest tests/test_guardrails.py::test_guardrail_report_never_changes_authority_decision` |
+| Guardrail engine cannot reach the authority decision — `authorise_case`'s signature is unchanged | `app/services/workflow.py::run_case_pipeline` calls `run_guardrails` before `authorise_case`, which still reads only `claims` | `pytest tests/test_guardrails.py::test_guardrail_report_never_changes_authority_decision` |
 | RAG guardrail metrics (mean retrieval relevance, groundedness pass rate, PII redaction count) computed across the full 28-case dataset, no hard-coded numbers | `app/evaluation.py::run_evaluation` | `pytest tests/test_evaluation_and_release_gate.py::test_rag_guardrail_metrics_are_wired_into_evaluation` |
 | Guardrail report and per-evidence relevance score exposed over real HTTP | `app/api.py::get_case_guardrail_report`, `get_case_evidence` | `pytest tests/test_api.py::test_guardrails_endpoint_returns_report_after_case_run`, `::test_evidence_endpoint_includes_relevance_score` |
+| All 6 operator UI tabs (including Guardrails) render real data, browser-verified | `docs/screenshots/*.png` | Captured with `frontend/scripts/screenshot.mjs` (Playwright/Chromium) against the actual Docker-built frontend talking to the actual Docker-built backend — not the dev server, not mocked data |
 
 ## DEMONSTRATED WITH SYNTHETIC FIXTURES
 
@@ -63,33 +79,35 @@ long-term memory, production-scale vector infrastructure. (Containerisation, CI/
 `CaseStatus` enforcement, trace hash chaining, and bounded multi-agent investigation are now resolved
 — see that file's "Resolved since the previous version" section, not this stale list.)
 
-## What is safe to say in an interview
+## Precisely scoped claims
 
-- "I implemented a deterministic authority gate that a model cannot influence, and I have a test that
-  proves an attempted auto-refund is blocked when the decision is REQUIRE_HUMAN."
-- "I built a release gate that actually blocks a degraded configuration — it's not a slide, it's a
-  passing test (`test_r2_regression_fixture_is_blocked`)."
-- "Prompt injection in retrieved content is flagged but structurally cannot change the authority
-  decision, because the decision only ever reads typed Claim objects, never raw text."
-- "24/24 observed critical recall on this dataset has a Wilson 95% lower bound of ~0.86 — I did not
-  present the raw 100% as if it were a guarantee."
-- "I built a bounded, budget-controlled multi-agent investigation loop — a supervisor delegates to
-  independent retrieval and critic agents — and the constraint that keeps any agent from reaching the
-  authority decision is enforced by a database CheckConstraint, not just trusted application code."
-- "I added real retrieval scoring — deterministic TF-IDF cosine similarity, not a fixture-membership
-  lookup — and a three-checkpoint guardrail engine: categorized injection detection, PII redaction,
-  and a groundedness check on a generated case summary that blocks and replaces any sentence whose
-  citation doesn't actually exist in the case."
-- "The generator is template-based today, so it can't currently produce a real hallucination — I
-  proved the groundedness guardrail actually works with a unit test that hand-constructs a fabricated
-  citation, rather than only testing the happy path."
-- "While building that guardrail I found a real false positive: it initially flagged a legitimate
+Each of these is true only in the specific scope stated — the scope is the point, not a hedge:
+
+- A deterministic authority gate that a model cannot influence is implemented; a test proves an
+  attempted auto-refund is blocked when the decision is REQUIRE_HUMAN
+  (`test_auto_refund_blocked_when_authority_requires_human`).
+- The release gate actually blocks a degraded configuration — not a slide, a passing test
+  (`test_r2_regression_fixture_is_blocked`).
+- Prompt injection in retrieved content is flagged but structurally cannot change the authority
+  decision, because the decision only ever reads typed Claim objects, never raw text.
+- 24/24 observed critical recall on this dataset has a Wilson 95% lower bound of ~0.86 — the raw 100%
+  is not presented as a guarantee.
+- A bounded, budget-controlled multi-agent investigation loop is implemented — a supervisor delegates
+  to independent retrieval and critic agents — and the constraint keeping any agent from reaching the
+  authority decision is enforced by a database CheckConstraint, not just application code.
+- Real retrieval scoring is implemented — deterministic TF-IDF cosine similarity, not a
+  fixture-membership lookup — alongside a three-checkpoint guardrail engine: categorized injection
+  detection, PII redaction, and a groundedness check on a generated case summary that blocks and
+  replaces any sentence whose citation doesn't actually exist in the case.
+- The case-summary generator is template-based today, so it cannot currently produce a real
+  hallucination on its own — the groundedness guardrail is instead proven with a unit test that
+  hand-constructs a fabricated citation, not only a happy-path test.
+- Building that guardrail surfaced a real false positive: it initially flagged a legitimate
   contradiction-case citation as ungrounded because it checked against *admitted* evidence instead of
-  all validated evidence. I found that by running the full 28-case evaluation dataset, not just the
-  hero case, and fixed the check's definition — that's documented in ADR-0006, not swept under the
-  rug."
+  all validated evidence. That was found by running the full 28-case evaluation dataset, not just the
+  hero case, and is documented in ADR-0006, not silently corrected.
 
-## What must NOT be claimed
+## What is not claimed here
 
 - No claim of production safety, accreditation, or live deployment (PRD §2).
 - No claim that R2 reproduces a specific "12/24" degraded-recall number — it does not, and the honest
@@ -97,13 +115,11 @@ long-term memory, production-scale vector infrastructure. (Containerisation, CI/
 - No claim of live OpenAI/Anthropic integration — none exists in this repository.
   `AgentProvider.OPENAI`/`ANTHROPIC` are schema-ready enum values only; every agent that actually runs
   (`RetrievalAgent`, `CriticAgent`, `SupervisorPlanner`) is deterministic and offline.
-- No claim that `docker compose up --build` has been run successfully — the Dockerfiles/compose file
-  exist and were reviewed, but the build was not executed (no Docker daemon in the dev sandbox).
-- No claim that the Guardrails tab was visually/browser-verified — no screenshot/browser automation
-  tool was available in the session that built it. What was actually verified: `tsc --noEmit` clean,
-  `npm run build` succeeds, the dev server serves the app shell, and `GET
-  /api/cases/{case_id}/guardrails` returns exactly the JSON shape the component consumes (checked
-  over real HTTP, not assumed). Open the app yourself to confirm rendering before an interview.
+- No claim that the Docker verification run reflects a fresh clone's default ports — the local machine
+  this was verified on had an unrelated container already bound to host port 8000, so the verification
+  run used a temporary host-port override (`18000`/`15173`); the committed `docker-compose.yml` still
+  maps `8000`/`5173` and was not changed. Re-verify port availability before relying on this on a new
+  machine.
 - No claim of a vector database, ANN index, or embedding model — `app/retrieval.py` is pure-Python
   TF-IDF/cosine similarity over the fixture corpus, a deliberate choice for determinism and offline
   testability, not a placeholder for something more sophisticated already built.
@@ -119,3 +135,14 @@ long-term memory, production-scale vector infrastructure. (Containerisation, CI/
   against real hallucinations — it is 1.0 by construction (the generator only ever cites the Claim it
   was built from) and the register above documents exactly what would need to change (a live
   generation adapter) for that number to mean something harder.
+- No claim that `app/serving/` calls a real model — `DeterministicFakeModel` is hash-seeded and
+  offline, by design (see its module docstring): the point is exercising real async-serving mechanics
+  (streaming, timeouts, cancellation, retry, backpressure, rate limiting), not simulating any specific
+  model's behaviour.
+- No claim that the serving slice is production-scale infrastructure — `ConcurrencyLimiter` and
+  `TokenBucketRateLimiter` are in-process, single-instance, in-memory (`app/serving/concurrency.py`,
+  `rate_limit.py`); a multi-process or multi-replica deployment would need a shared store (e.g. Redis),
+  which does not exist here and is not claimed to.
+- No claim that the retry path has been exercised against a real flaky network — `tenacity`-based retry
+  is proven against `DeterministicFakeModel`'s injectable `fail_mode`, a controlled test double, not a
+  live backend under real-world failure conditions.

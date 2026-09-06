@@ -7,11 +7,16 @@ CASE -> INVESTIGATE -> VALIDATE -> RESOLVE -> AUTHORISE -> RECONCILE
 Cross-cutting: CANONICAL STATE -> TRACE -> EVALUATION -> RELEASE GATE
 ```
 
-Implemented in [`backend/app/services/workflow.py`](../backend/app/services/workflow.py) as pure functions:
-`_investigate` -> `_validate` -> `_resolve` -> `_authorise` -> `_create_review_task` -> `_reconcile`,
-orchestrated by `run_case_pipeline`. Every stage appends `TraceEvent`s via `_TraceRecorder`.
-`_investigate` itself delegates to `app/agents.py::SupervisorPlanner` — see "Governed tools and
-budgets" below and [ADR 0005](adrs/0005-loop-controlled-multi-agent-investigation.md).
+`backend/app/services/workflow.py::run_case_pipeline` is the thin orchestrator; each stage's actual
+logic lives in a sibling module so no single file owns the whole pipeline:
+`_investigate` (workflow.py itself) -> `app/services/validate.py::validate_evidence` ->
+`app/services/resolve.py::resolve_claims` -> `app/services/authorise.py::authorise_case` ->
+`_create_review_task` -> `_reconcile` (both back in workflow.py, tightly bound to orchestration).
+Every stage appends `TraceEvent`s via `app/services/trace.py::TraceRecorder` — extracted to its own
+leaf module specifically so `validate.py`/`resolve.py`/`authorise.py` can all import it without a
+circular dependency on `workflow.py`, which imports them. `_investigate` itself delegates to
+`app/agents.py::SupervisorPlanner` — see "Governed tools and budgets" below and
+[ADR 0005](adrs/0005-loop-controlled-multi-agent-investigation.md).
 
 ```mermaid
 flowchart LR
@@ -39,11 +44,14 @@ a `GuardrailReport` for the operator, and nothing downstream reads it back into 
 SQLAlchemy 2 models in [`backend/app/orm_models.py`](../backend/app/orm_models.py), migrated with Alembic
 (`backend/alembic/versions/`). `Case.state_version` increments on every persisted run
 (`app/persistence.py::persist_case_run`) so a stale write is detectable by version comparison rather
-than silently overwritten.
+than silently overwritten. `persist_case_run` itself is a thin transaction boundary that delegates each
+entity group to a `_persist_*`/`_upsert_*` helper in the same file (evidence, claims,
+authority/review/outcome, trace events, agent records, the guardrail report) rather than mapping
+everything inline in one function.
 
 ## Why the model never owns authority
 
-`app/services/workflow.py::_authorise` is plain Python — no prompt, no model call. It reads typed
+`app/services/authorise.py::authorise_case` is plain Python — no prompt, no model call. It reads typed
 `Claim` objects and returns a typed `AuthorityRecord`. `app/authority_enforcement.py::enforce_action`
 is the only place an irreversible action (`AUTO_REFUND`) can run, and it checks `AuthorityDecision.ALLOW`
 before allowing it — see [ADR 0003](adrs/0003-model-does-not-own-authority.md).
@@ -60,7 +68,7 @@ exhausting it produces `TerminationStatus.CONTROL_BLOCKED`, not an unhandled exc
 case binding), producing durable `AgentRun`/`AgentStep`/`AgentHandoff` rows instead of the transient,
 in-memory-only bookkeeping `RunBudget` had on its own — `GET /api/cases/{case_id}/agent-runs` exposes
 the recorded loop. Every `AgentRun.stage` is `'INVESTIGATE'`, enforced by a database `CheckConstraint`,
-not just application code: nothing downstream (`_validate` onward) can see an agent's output except
+not just application code: nothing downstream (`validate_evidence` onward) can see an agent's output except
 the same unverified candidate list `_investigate` always returned. See
 [ADR 0005](adrs/0005-loop-controlled-multi-agent-investigation.md).
 
@@ -69,7 +77,7 @@ the same unverified candidate list `_investigate` always returned. See
 `app/state_machine.py` defines the allowed `CaseStatus` transitions from PRD section 9.
 `run_case_pipeline` steps through them for real — `CREATED → INVESTIGATING → EVIDENCE_VALIDATED →
 CLAIMS_RESOLVED → AUTHORITY_EVALUATED → NEEDS_REVIEW` (or `→ READY_TO_RECONCILE → COMPLETED`) — calling
-`validate_transition` at each step via `_TraceRecorder.transition`. An illegal transition raises
+`validate_transition` at each step via `app/services/trace.py::TraceRecorder.transition`. An illegal transition raises
 `InvalidTransitionError` before anything is recorded.
 
 Every `TraceEvent` also carries a real SHA-256 hash chain: `state_before_hash` is the prior event's
@@ -96,7 +104,8 @@ picker in the sidebar lets the operator choose which of the four runnable cases 
 
 ## Multi-case fixtures
 
-`app/services/workflow.py::load_case_fixture(case_id)` resolves a case_id against
+`app/services/fixtures.py::load_case_fixture(case_id)` (re-exported from `app.services.workflow` for
+callers) resolves a case_id against
 `list_available_case_ids()` (`CASE-RET-001` plus every `*.json` under
 `backend/app/fixtures/cases/`) and raises `UnknownCaseError` for anything else — there is still no
 free-text case intake, only a larger versioned set of fixtures. `GET /api/case-fixtures` exposes the
@@ -116,14 +125,36 @@ no change in blocking behaviour), regex-based PII redaction (`redact_pii`) over 
 fields and evidence excerpts, and a generated, non-authoritative case summary
 (`generate_case_summary`) whose citations are independently re-verified by `check_groundedness` —
 a citation to evidence or a claim that doesn't actually exist in the case is the hallucination case,
-and that sentence is replaced with a safe fallback rather than shown as-is. `_authorise`'s signature
-is unchanged by any of this — it still reads only `claims` — so guardrail findings structurally
-cannot reach the authority decision. See [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md)
+and that sentence is replaced with a safe fallback rather than shown as-is. `authorise_case`'s
+signature is unchanged by any of this — it still reads only `claims` — so guardrail findings
+structurally cannot reach the authority decision. See [ADR 0006](adrs/0006-rag-guardrails-are-non-authoritative.md)
 for the full design, including a real false positive found and fixed while building the groundedness
 check.
 
 `GET /api/cases/{case_id}/guardrails` exposes the persisted `GuardrailReport`; `GET
 /api/cases/{case_id}/evidence` includes each item's `relevance_score`.
+
+## Model-serving slice
+
+`backend/app/serving/` is a second, independent surface mounted into the same FastAPI app
+(`app/api.py::app.include_router(serving_router)`) — it has no dependency on and is not part of the
+case-assurance pipeline above. `POST /api/generate/stream` streams a deterministic, hash-seeded fake
+model's output over SSE (`model_backend.py::DeterministicFakeModel`, `sse-starlette`), demonstrating
+the async-serving mechanics a real inference service needs rather than any specific model's behaviour:
+a request/session ID on every response; a per-request timeout (`asyncio.wait_for`); client-disconnect
+detection (`request.is_disconnected()`) that stops generation and releases its concurrency slot;
+bounded in-flight concurrency plus a bounded wait queue, rejecting with `503` once both are full
+(`concurrency.py::ConcurrencyLimiter`); a per-session token-bucket rate limiter returning `429`
+(`rate_limit.py`); `tenacity`-based retry confined to the pre-stream "prime" step (so a retry never
+risks re-sending output already seen by a client), converting an exhausted retry or a mid-stream
+failure into a graceful terminal SSE `error` event rather than a hang or a raw `500`; model/checkpoint
+version on every response; structured JSON logs (`logging_utils.py`); and Prometheus metrics at
+`GET /metrics` (`metrics.py`). `streaming.py::stream_generation` deliberately takes a plain
+`is_disconnected` callable rather than a `Request`, which is what makes its timeout/cancellation/retry
+paths directly unit-testable without an HTTP transport — see `backend/tests/test_serving.py`.
+Load-tested with Locust at 10/50/100 concurrent users; see
+[`docs/performance_report.md`](performance_report.md) for the real results, including the concurrency
+limiter's throughput ceiling confirmed quantitatively.
 
 ## Auth boundary
 

@@ -7,7 +7,7 @@ mistaken for a production claim.
 |---|---|---|
 | Enterprise IAM / access control | `app/auth.py` is a static bearer-token-to-role map (`API_TOKENS` env var), not OAuth/OIDC/SSO, no token expiry or revocation, no audit log of auth events | Real authn/authz boundary exists and is enforced (401/403 tested), but it is demo-grade, not enterprise IAM |
 | Production data classification & retention | No PII/retention policy engine | Only synthetic fixtures exist |
-| Distributed queues / distributed tracing | Single-process, synchronous pipeline | In-process `_TraceRecorder`, SQLite |
+| Distributed queues / distributed tracing | Single-process, synchronous pipeline | In-process `TraceRecorder`, SQLite |
 | Real retailer/order/CRM integration | No external system calls anywhere | Local JSON fixtures only |
 | Automatic refunds or other irreversible actions | `AUTO_REFUND_PERMITTED` is hard-coded FALSE, `enforce_action` blocks `AUTO_REFUND`/`ISSUE_REFUND` outside `ALLOW` | Enforced in code and tested (`tests/test_adversarial.py` #16) |
 | Enterprise legal/compliance accreditation | No accreditation process exists | N/A — explicitly out of scope (PRD §2) |
@@ -18,6 +18,17 @@ mistaken for a production claim.
 | Live LLM-generated explanations | `app/guardrails.py::generate_case_summary` is deterministic, template-based text built from typed Claims — no model call | Groundedness checking is unit-tested against a hand-crafted violation, not against a real model's output |
 | Enterprise PII/DLP classifier | `app/guardrails.py::redact_pii` is three fixed regexes (email, AU mobile, credit-card-shaped digit runs), not a trained classifier | Catches the patterns it's given; no ML-based detection, no locale coverage beyond AU mobile |
 | Maintained red-team/jailbreak corpus | `INJECTION_CATEGORY_MARKERS` is seven substring markers grouped into three categories — the same detection surface the prototype always had | No adversarial corpus, no fuzzing, no coverage measurement against known jailbreak techniques |
+| Document-level read-permission enforcement | `app/auth.py::require_auth` gates only the four mutating endpoints (create/run/replay a case, decide a review); every `GET` endpoint (`/api/cases/{id}/evidence`, `/claims`, `/trace`, `/guardrails`, `/agent-runs`, etc.) is unauthenticated and returns identical data to any caller | No read-side authorization exists anywhere in this repository — see `docs/security.md` |
+| Structure-aware document ingestion | No parsing pipeline for real documents (PDF/HTML/Word) with heading/section-aware chunking | Evidence excerpts are small, pre-authored strings in JSON fixtures (`app/fixtures/*.json`), never ingested from an actual source document |
+| A reranking stage on retrieved candidates | No second-stage reranker (cross-encoder, LLM-based, or heuristic) runs after retrieval | `app/retrieval.py::score_candidates` computes one TF-IDF cosine score per candidate; ranking and admission both stop there |
+| Document-owner / scope metadata | No schema field records who owns a document or what scope (team/tenant/department) it belongs to | `SourceSnapshot`/`Evidence` carry `source_class` and `allowed_for_evidence` — authority/class flags, not ownership or scope |
+| Live model behind `app/serving/` | No real inference call anywhere — `DeterministicFakeModel` is hash-seeded and offline by design | The async-serving mechanics (streaming, timeout, cancellation, retry, backpressure, rate limiting) are real; the model behind them is not |
+| Distributed rate limiting / concurrency control | `ConcurrencyLimiter` and `TokenBucketRateLimiter` (`app/serving/`) are in-process, single-instance, in-memory | A multi-replica deployment would need a shared store (e.g. Redis) — not implemented |
+
+These five rows exist specifically because a public capability claim (resume, cover letter, or verbal)
+must never outrun what this repository can independently prove — see
+`docs/verification_matrix.md`'s "Scope of this public repository".
+
 ## Resolved since the previous version of this document
 
 These were listed as gaps before and are now implemented and tested — kept here so the history of
@@ -30,14 +41,19 @@ what changed is visible, not silently dropped:
   `InvalidTransitionError` and is never recorded (`tests/test_trace_chain.py`).
 - **TraceEvent hash chaining** — every `TraceEvent` now carries real `argument_hash`, `result_hash`,
   `state_before_hash`, `state_after_hash` values folded into a running SHA-256 chain
-  (`app/services/workflow.py::_TraceRecorder`). `verify_trace_chain()` recomputes and checks it;
+  (`app/services/trace.py::TraceRecorder`). `verify_trace_chain()` recomputes and checks it;
   tampering, reordering, or replaying the same fixture are all covered by
   `tests/test_trace_chain.py`. Exposed via `GET /api/cases/{case_id}/trace/verify`.
 - **Containerisation** — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` added and
-  **build-verified end-to-end**: `docker compose build` succeeded for both images, `docker compose up`
-  started both containers, the backend ran its Alembic migration on boot, and
-  `POST /api/cases` / `GET /api/cases/{id}/trace/verify` were exercised against the running backend
-  container. The frontend container (nginx) served the built SPA.
+  **build-verified end-to-end**, re-run and re-confirmed after the RAG guardrails work landed:
+  `docker compose up --build` built both images, the backend ran its Alembic migration on boot (log
+  shows all 5 revisions applying, including the guardrail-report migration), `GET /health` returned
+  `{"status":"ok"}`, `POST /api/cases` created the hero case, `GET
+  /api/cases/CASE-RET-001/trace/verify` returned `chain_verified: true`, `GET
+  /api/cases/CASE-RET-001/guardrails` returned a populated report, and the frontend container served
+  the built SPA (HTTP 200). Run on a machine with an unrelated container already bound to host port
+  8000, so this specific run used a temporary host-port override — the committed `docker-compose.yml`
+  itself is unchanged (still `8000`/`5173`).
 - **CI/CD** — this is now a git repository with `.github/workflows/ci.yml`, confirmed green on GitHub
   Actions: https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354 (backend and
   frontend jobs both passed).
@@ -65,7 +81,7 @@ what changed is visible, not silently dropped:
   cosine relevance scoring (previously VALIDATE had no ranking signal, only fixture-membership
   lookup); `app/guardrails.py` adds categorized injection detection, PII redaction, and a
   groundedness-checked generated case summary. Still bounded the same way as everything else here:
-  `_authorise` is untouched and reads only `claims`, so none of this can influence the authority
+  `authorise_case` is untouched and reads only `claims`, so none of this can influence the authority
   decision. See `docs/adrs/0006-rag-guardrails-are-non-authoritative.md` and
   `backend/tests/test_guardrails.py`. This is a partial resolution of the vector-infrastructure row
   above, not a full one — see that row for what's still missing.

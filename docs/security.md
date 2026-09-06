@@ -26,7 +26,7 @@
 - **Escaped UI rendering.** The frontend is React with no `dangerouslySetInnerHTML` anywhere — all
   retrieved/model-shaped content renders as text, not HTML.
 - **Log/trace minimisation.** `TraceEvent` stores hashes and IDs, not full request/response payloads —
-  and those hashes are now real, chained SHA-256 values (`app/services/workflow.py::_TraceRecorder`),
+  and those hashes are now real, chained SHA-256 values (`app/services/trace.py::TraceRecorder`),
   tamper-evident via `GET /api/cases/{case_id}/trace/verify` (`tests/test_trace_chain.py`).
 - **Static checks.** `make lint` (ruff) and `make typecheck` (mypy) are both clean
   (`ruff check app tests` → 0 issues; `mypy app` → 0 issues).
@@ -41,18 +41,62 @@
   (`tests/test_api.py::test_create_case_requires_auth`,
   `::test_wrong_role_cannot_decide_review`). This is a static token map, not enterprise IAM — see
   `docs/production_gap_register.md`.
-- **Docker build verified end-to-end.** `docker compose build` succeeded for both images;
-  `docker compose up` started both containers, the backend ran its Alembic migration on boot, and
-  `POST /api/cases` / `GET /api/cases/{id}/trace/verify` were exercised against the running container.
+- **Containers run unprivileged.** `backend/Dockerfile` creates and switches to a
+  non-root `app` user before `CMD` runs — the process never runs as root, and
+  `/data` is chowned to that user so the SQLite volume stays writable. The
+  frontend's `nginx:alpine` image runs its worker processes (the ones that
+  actually parse requests) as the unprivileged `nginx` user by default — confirmed
+  via `docker run --rm nginx:alpine head -5 /etc/nginx/nginx.conf` (`user nginx;`);
+  only the master process, which just binds port 80 and supervises workers, stays
+  root, the standard nginx security model. Not switched to a fully-unprivileged
+  base image (e.g. `nginxinc/nginx-unprivileged`) since that would also move the
+  listen port away from 80 and ripple into `docker-compose.yml` for marginal
+  additional benefit over the existing worker-level separation.
+  **A real gap found while verifying this**: a pre-existing `backend-data` named
+  volume created by an older, root-running image is root-owned, and the new
+  non-root `app` user cannot write to it — `POST /api/cases` fails with
+  `sqlite3.OperationalError: attempt to write a readonly database`. Confirmed
+  this is specific to upgrading an existing deployment in place, not a defect
+  for new ones: `docker compose down -v` (dropping the stale volume) followed
+  by `docker compose up --build` recreates it with the correct ownership and
+  every endpoint — case creation, trace verify, guardrails, evaluation, the
+  serving slice, the frontend — was re-verified working end to end. Anyone
+  upgrading an existing local deployment past this change needs to drop and
+  recreate the volume (fine for this synthetic-data demo; would need an actual
+  migration step for anything with real data worth keeping).
+- **Dependency pinning + scanning.** `backend/requirements.txt` (runtime) and
+  `backend/requirements-dev.txt` (test/lint/load-test tooling, never installed in
+  the runtime image) pin exact versions. CI runs `pip-audit -r requirements.txt`
+  and `npm audit --audit-level=high` on every push/PR. `pip-audit` currently
+  reports no known vulnerabilities (starlette was bumped to `1.6.0` — paired with
+  `fastapi==0.141.1`, the first fastapi release with no `starlette<0.51` upper
+  bound — after `pip-audit` found 7 CVEs against the previously-resolved
+  `starlette==0.50.0`; the full test suite was re-run and stayed green after the
+  bump). `npm audit` has one remaining accepted finding: `esbuild`/`vite`
+  (moderate) — a dev-server-only exposure with no effect on the built static
+  assets actually served in production — whose only fix is a breaking `vite` v8
+  major upgrade, not taken in this pass; the CI step reports it
+  (`continue-on-error: true`) rather than either hiding it or blocking on an
+  unreviewed breaking change.
+- **Docker build verified end-to-end.** `docker compose up --build` built both images; the backend ran
+  its Alembic migration on boot (all 5 revisions), `GET /health`, `POST /api/cases`, `GET
+  /api/cases/{id}/trace/verify` (`chain_verified: true`), and `GET /api/cases/{id}/guardrails` were all
+  exercised against the running containers, and the frontend container served the built SPA (HTTP 200).
+  Re-verified after the RAG guardrails work landed, not a stale claim from before it existed.
 
 ## Explicitly not implemented (proposed only)
 
+- **No read-side authorization.** `require_auth` (above) gates only the four mutating endpoints. Every
+  `GET` endpoint — evidence, claims, trace, guardrails, agent-runs, reviews — is unauthenticated and
+  returns the same data to any caller; there is no document-level, case-level, or scope-based read
+  permission anywhere in this repository. See `docs/production_gap_register.md`.
 - No live network ingestion exists in this repository, so a URL allow-list, timeouts, size limits and
   content-type checks for "any optional ingestion command" (PRD §20) have no code to attach to yet.
   Fixtures are local, versioned JSON files only.
 - No dependency/SCA scanner is wired into CI yet.
 - **CORS is wide open** (`allow_origins=["*"]` in `app/api.py`) to let the Vite dev server (different
-  port) call the API during local demos. Acceptable for an offline, same-machine, no-real-data demo;
-  must be scoped to a specific origin before any shared or hosted deployment.
+  port) call the API during local demos — a same-machine, no-real-data convenience, unrelated to (and
+  not a substitute for) the bearer-token authz above. Must be scoped to a specific origin before any
+  shared or hosted deployment.
 
 See `docs/production_gap_register.md` for the full list.

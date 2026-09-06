@@ -1,7 +1,7 @@
 .PHONY: setup migrate seed test lint typecheck eval demo-reset demo-smoke
 
 setup:
-	cd backend && python -m pip install -r requirements.txt
+	cd backend && python -m pip install -r requirements-dev.txt
 	cd frontend && npm install
 
 migrate:
@@ -14,7 +14,7 @@ test:
 	cd backend && python -m pytest -q
 
 lint:
-	cd backend && python -m ruff check app tests
+	cd backend && python -m ruff check app tests loadtest
 
 typecheck:
 	cd backend && python -m mypy app

@@ -6,8 +6,8 @@ ranking signal at all — a source was a "match" purely because its
 explainable relevance score on top of that lookup, using only the standard
 library: no embedding model, no vector database, no network call. That is a
 deliberate choice, not a placeholder — see
-docs/adrs/0006-rag-guardrails-are-non-authoritative.md and the "What must NOT
-be claimed" section of docs/interview_evidence.md.
+docs/adrs/0006-rag-guardrails-are-non-authoritative.md and the "What is not
+claimed here" section of docs/verification_matrix.md.
 
 Every function here is pure and deterministic: the same query and candidate
 pool always produce the same scores, which is what makes them safe to use in

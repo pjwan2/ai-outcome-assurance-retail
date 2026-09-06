@@ -296,7 +296,7 @@ class GuardrailReportORM(Base):
     """One case run's guardrail record — input findings (PII redactions,
     categorized injection flags), retrieval relevance scores, and the
     groundedness-checked case summary. Purely observational: nothing here is
-    read by `_authorise` (app.services.workflow), see
+    read by `authorise_case` (app.services.authorise), see
     docs/adrs/0006-rag-guardrails-are-non-authoritative.md."""
 
     __tablename__ = "guardrail_reports"

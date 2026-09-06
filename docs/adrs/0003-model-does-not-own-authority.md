@@ -9,7 +9,7 @@ directly cause an irreversible action, then a bad or manipulated planner output 
 manipulated real-world outcome — including via prompt injection in retrieved content.
 
 ## Decision
-`_authorise` (`app/services/workflow.py`) is plain Python, not a prompt: it pattern-matches on typed
+`authorise_case` (`app/services/authorise.py`) is plain Python, not a prompt: it pattern-matches on typed
 `Claim.status` values and returns a typed `AuthorityRecord`. It never sees raw evidence excerpts.
 `enforce_action` (`app/authority_enforcement.py`) additionally blocks `AUTO_REFUND`/`ISSUE_REFUND`
 outside `AuthorityDecision.ALLOW`, and `AUTO_REFUND_PERMITTED` is unconditionally `FALSE` in this

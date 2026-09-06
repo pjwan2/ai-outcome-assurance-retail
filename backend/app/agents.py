@@ -7,9 +7,9 @@ durable `AgentRun`/`AgentStep`/`AgentHandoff` records instead of the
 transient, in-memory-only bookkeeping `app.budget.RunBudget` had on its own.
 
 Every agent here only ever returns *candidates* or advisory annotations —
-`app.services.workflow._validate`/`_admitted` remains the sole stage that can
-promote a candidate to admitted Evidence (ADR-0001), and nothing in this
-module can reach AUTHORISE (ADR-0003). See
+`app.services.validate.validate_evidence`/`admitted_evidence` remains the
+sole stage that can promote a candidate to admitted Evidence (ADR-0001), and
+nothing in this module can reach AUTHORISE (ADR-0003). See
 docs/adrs/0005-loop-controlled-multi-agent-investigation.md.
 """
 
@@ -42,9 +42,9 @@ def _sha256(payload: str) -> str:
 
 
 class TraceRecorder(Protocol):
-    """Structural match for `app.services.workflow._TraceRecorder.record` —
-    kept as a Protocol (not an import) so this module has no dependency on
-    workflow.py, avoiding a circular import."""
+    """Structural match for `app.services.trace.TraceRecorder.record` — kept
+    as a Protocol (not an import) so this lower-level module has no
+    dependency on the app.services orchestration layer."""
 
     def record(
         self,

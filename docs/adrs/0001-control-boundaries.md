@@ -12,10 +12,11 @@ Split the pipeline into stages with different trust levels:
 
 - `INVESTIGATE` returns *candidates*, never verified fact (`app/services/workflow.py::_investigate`).
 - `VALIDATE` is the only stage allowed to promote a candidate to admitted `Evidence`
-  (`_validate`, `_admitted`).
-- `RESOLVE` may only read admitted evidence, never raw candidates (`_resolve`).
+  (`app/services/validate.py::validate_evidence`, `admitted_evidence`).
+- `RESOLVE` may only read admitted evidence, never raw candidates
+  (`app/services/resolve.py::resolve_claims`).
 - `AUTHORISE` may only read typed `Claim` objects, never evidence excerpts or raw candidates
-  (`_authorise`).
+  (`app/services/authorise.py::authorise_case`).
 - `enforce_action` (`app/authority_enforcement.py`) is the single choke point for irreversible actions.
 
 ## Consequences

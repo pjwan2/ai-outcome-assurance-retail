@@ -21,14 +21,16 @@ This ADR makes the loop real and adds a second, independent agent, without reope
 - `RetrievalAgent` — the pre-existing fixture-lexical-search candidate lookup, unchanged.
 - `CriticAgent` — an independent second opinion that re-checks each candidate's case binding before
   `VALIDATE` runs. It can only annotate its own `AgentStep`; it cannot admit, reject, or mutate
-  `Evidence` — that remains solely `_validate`/`_admitted`'s job (ADR-0001).
+  `Evidence` — that remains solely `validate_evidence`/`admitted_evidence`'s job
+  (`app/services/validate.py`, ADR-0001).
 - `SupervisorPlanner` — orchestrates the two via `AgentHandoff` records and is the sole entry point
   `app/services/workflow.py::_investigate` calls.
 
 Every `AgentRun` this produces persists `stage` as `'INVESTIGATE'`, enforced by a database
 `CheckConstraint` (`ck_agent_run_stage_investigate_only`) on `agent_runs` — not just by convention in
 application code, the same fail-closed posture `app/state_machine.py::validate_transition` uses for
-`CaseStatus`. `_validate`, `_resolve`, `_authorise`, `_create_review_task`, and `_reconcile` are
+`CaseStatus`. `validate_evidence`, `resolve_claims`, `authorise_case`, `_create_review_task`, and
+`_reconcile` are
 untouched by this change: nothing downstream of `INVESTIGATE` can see an `AgentRun`, an `AgentStep`,
 or a `CriticAgent` annotation.
 

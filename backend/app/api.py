@@ -29,6 +29,7 @@ from app.services.workflow import (
     run_case_workflow,
     verify_trace_chain,
 )
+from app.serving.router import router as serving_router
 
 
 @asynccontextmanager
@@ -41,14 +42,20 @@ app = FastAPI(title="AI Outcome Assurance", lifespan=lifespan)
 
 # Local-demo CORS: the operator UI (Vite dev server) runs on a different port
 # than the API, so browsers issue CORS preflight requests for every mutating
-# call. Wide open here because this is a same-machine offline demo with no
-# auth and no real user data — see docs/security.md.
+# call. Wide open here for same-machine offline-demo convenience — this is
+# orthogonal to authn/authz, not a substitute for it: mutating endpoints
+# still require a bearer token (require_auth, below), and every GET endpoint
+# has no read-side authorization at all (see docs/security.md,
+# docs/production_gap_register.md). Must be scoped to a specific origin
+# before any shared or hosted deployment.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(serving_router)
 
 
 def get_db() -> Iterator[Session]:

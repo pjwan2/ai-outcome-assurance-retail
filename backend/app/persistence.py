@@ -15,6 +15,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.agents import REGISTERED_AGENTS
+from app.models import Claim, Evidence, SourceSnapshot, TraceEvent
 from app.orm_models import (
     AgentDefinitionORM,
     AgentHandoffORM,
@@ -39,17 +40,15 @@ def _parse_dt(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
-    case_id = artifacts.case["case_id"]
-
-    # Same atomic-upsert reasoning as the agent-definitions registry below:
+def _upsert_source_snapshots(session: Session, snapshots: list[SourceSnapshot]) -> None:
+    # `INSERT ... ON CONFLICT DO NOTHING` rather than `get()`-then-`add()`:
     # a check-then-insert here races under concurrent requests for the same
     # source_id (e.g. two overlapping runs of the same fixture case), and
     # the source_snapshots table is shared across every case, not scoped to
     # this one — a plain `get()`-then-`add()` was confirmed to raise
     # sqlite3.IntegrityError under React 18 StrictMode's double-invoked
     # mount effect (two concurrent POST /api/cases for the same hero case).
-    for snapshot in artifacts.snapshots:
+    for snapshot in snapshots:
         session.execute(
             sqlite_insert(SourceSnapshotORM)
             .values(
@@ -66,14 +65,15 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
             .on_conflict_do_nothing(index_elements=["source_id"])
         )
 
-    # `INSERT ... ON CONFLICT DO NOTHING` rather than `get()`-then-`add()`:
-    # the registry is a small, fixed set of rows touched by every single
-    # persisted run, so a check-then-insert here is a real, easily-hit race
-    # under concurrent requests (two overlapping `POST /api/cases` — e.g.
-    # React 18 StrictMode double-invoking its mount effect in dev — both see
-    # "not present yet" and both try to insert, and the loser gets a raw
-    # UNIQUE-constraint IntegrityError instead of a handled outcome). The
-    # atomic upsert removes the race instead of narrowing its window.
+
+def _upsert_agent_definitions(session: Session) -> None:
+    # Same atomic-upsert reasoning as above: the registry is a small, fixed
+    # set of rows touched by every single persisted run, so a check-then-
+    # insert here is a real, easily-hit race under concurrent requests (two
+    # overlapping `POST /api/cases` — e.g. React 18 StrictMode
+    # double-invoking its mount effect in dev — both see "not present yet"
+    # and both try to insert, and the loser gets a raw UNIQUE-constraint
+    # IntegrityError instead of a handled outcome).
     for defn in REGISTERED_AGENTS:
         session.execute(
             sqlite_insert(AgentDefinitionORM)
@@ -91,35 +91,31 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
             .on_conflict_do_nothing(index_elements=["agent_id"])
         )
 
+
+def _replace_existing_case(session: Session, case_id: str) -> int:
+    """Delete any prior persisted run for this case_id (and its otherwise-
+    unreachable AgentHandoff rows) so a replay starts clean, returning the
+    next `state_version` to write."""
     existing_case = session.get(CaseORM, case_id)
-    next_version = existing_case.state_version + 1 if existing_case else 1
-    if existing_case is not None:
-        # AgentHandoffORM rows aren't reachable through an ORM relationship
-        # from Case, so the `cascade="all, delete-orphan"` on Case.agent_runs
-        # won't clean them up on replay — delete them explicitly rather than
-        # relying on SQLite's FK ondelete=CASCADE, which is off by default.
-        old_run_ids = [r.agent_run_id for r in existing_case.agent_runs]
-        if old_run_ids:
-            session.query(AgentHandoffORM).filter(AgentHandoffORM.parent_run_id.in_(old_run_ids)).delete(
-                synchronize_session=False
-            )
-        session.delete(existing_case)
-        session.flush()
+    if existing_case is None:
+        return 1
+    # AgentHandoffORM rows aren't reachable through an ORM relationship from
+    # Case, so the `cascade="all, delete-orphan"` on Case.agent_runs won't
+    # clean them up on replay — delete them explicitly rather than relying
+    # on SQLite's FK ondelete=CASCADE, which is off by default.
+    old_run_ids = [r.agent_run_id for r in existing_case.agent_runs]
+    if old_run_ids:
+        session.query(AgentHandoffORM).filter(AgentHandoffORM.parent_run_id.in_(old_run_ids)).delete(
+            synchronize_session=False
+        )
+    next_version = existing_case.state_version + 1
+    session.delete(existing_case)
+    session.flush()
+    return next_version
 
-    case_row = CaseORM(
-        case_id=case_id,
-        as_of=_parse_dt(artifacts.case["as_of"]),
-        order_ref=artifacts.case["order_ref"],
-        seller_ref=artifacts.case["seller_ref"],
-        product_ref=artifacts.case["product_ref"],
-        risk_band=artifacts.case["risk_band"],
-        status=artifacts.termination_status.value,
-        source_refs=artifacts.case["source_refs"],
-        state_version=next_version,
-    )
-    session.add(case_row)
 
-    for e in artifacts.evidence:
+def _persist_evidence(session: Session, case_id: str, evidence: list[Evidence]) -> None:
+    for e in evidence:
         session.add(
             EvidenceORM(
                 evidence_id=e.evidence_id,
@@ -138,7 +134,9 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
             )
         )
 
-    for c in artifacts.claims:
+
+def _persist_claims(session: Session, case_id: str, claims: list[Claim]) -> None:
+    for c in claims:
         session.add(
             ClaimORM(
                 claim_id=c.claim_id,
@@ -152,6 +150,8 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
             )
         )
 
+
+def _persist_authority_review_and_outcome(session: Session, case_id: str, artifacts: CaseArtifacts) -> None:
     authority = artifacts.authority
     session.add(
         AuthorityRecordORM(
@@ -194,7 +194,9 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
         )
     )
 
-    for t in artifacts.trace_events:
+
+def _persist_trace_events(session: Session, case_id: str, trace_events: list[TraceEvent]) -> None:
+    for t in trace_events:
         session.add(
             TraceEventORM(
                 trace_id=t.trace_id,
@@ -212,6 +214,8 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
             )
         )
 
+
+def _persist_agent_records(session: Session, case_id: str, artifacts: CaseArtifacts) -> None:
     for run in artifacts.agent_runs:
         session.add(
             AgentRunORM(
@@ -265,19 +269,55 @@ def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
             )
         )
 
+
+def _persist_guardrail_report(session: Session, case_id: str, artifacts: CaseArtifacts) -> None:
     report = artifacts.guardrail_report
-    if report is not None:
-        session.add(
-            GuardrailReportORM(
-                report_id=report.report_id,
-                case_id=case_id,
-                input_findings=[asdict(f) for f in report.input_findings],
-                relevance_scores=report.relevance_scores,
-                summary_sentences=[asdict(s) for s in report.summary_sentences],
-                ungrounded_count=report.ungrounded_count,
-                created_at=report.generated_at,
-            )
+    if report is None:
+        return
+    session.add(
+        GuardrailReportORM(
+            report_id=report.report_id,
+            case_id=case_id,
+            input_findings=[asdict(f) for f in report.input_findings],
+            relevance_scores=report.relevance_scores,
+            summary_sentences=[asdict(s) for s in report.summary_sentences],
+            ungrounded_count=report.ungrounded_count,
+            created_at=report.generated_at,
         )
+    )
+
+
+def persist_case_run(session: Session, artifacts: CaseArtifacts) -> CaseORM:
+    """Replace any prior persisted run for this case with `artifacts` in one
+    transaction, bumping `state_version` rather than overwriting fields in
+    place. Delegates each entity group to a `_persist_*`/`_upsert_*` helper
+    above — this function is the transaction boundary, not the mapping
+    logic."""
+    case_id = artifacts.case["case_id"]
+
+    _upsert_source_snapshots(session, artifacts.snapshots)
+    _upsert_agent_definitions(session)
+    next_version = _replace_existing_case(session, case_id)
+
+    case_row = CaseORM(
+        case_id=case_id,
+        as_of=_parse_dt(artifacts.case["as_of"]),
+        order_ref=artifacts.case["order_ref"],
+        seller_ref=artifacts.case["seller_ref"],
+        product_ref=artifacts.case["product_ref"],
+        risk_band=artifacts.case["risk_band"],
+        status=artifacts.termination_status.value,
+        source_refs=artifacts.case["source_refs"],
+        state_version=next_version,
+    )
+    session.add(case_row)
+
+    _persist_evidence(session, case_id, artifacts.evidence)
+    _persist_claims(session, case_id, artifacts.claims)
+    _persist_authority_review_and_outcome(session, case_id, artifacts)
+    _persist_trace_events(session, case_id, artifacts.trace_events)
+    _persist_agent_records(session, case_id, artifacts)
+    _persist_guardrail_report(session, case_id, artifacts)
 
     session.commit()
     return case_row

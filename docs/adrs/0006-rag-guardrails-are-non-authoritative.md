@@ -9,32 +9,34 @@ Two gaps sat in this repository even after ADR-0005's multi-agent investigation 
 - `app/agents.py::RetrievalAgent` returned candidates with no ranking signal at all — a source was a
   "match" purely because its `source_id` appeared in `case["source_refs"]`. That is fixture lookup,
   not retrieval.
-- Nothing played the role of "the model's answer." `_validate` already had guardrail-shaped checks
+- Nothing played the role of "the model's answer." `validate_evidence` (`workflow.py::_validate` at the
+  time this ADR was written, before a later refactor split `workflow.py` into `app/services/*.py`)
+  already had guardrail-shaped checks
   (source authority, hash integrity, contradiction detection, a flat `INJECTION_MARKERS` substring
   scan), but there was no generation step, so there was nothing for a groundedness/hallucination
   guardrail to check.
 
 This ADR adds both, under the same fail-closed posture ADR-0001/0003 already established for
 INVESTIGATE: whatever is added must be able to annotate, score, or redact, but must never become a
-second path into `_authorise`.
+second path into `authorise_case`.
 
 ## Decision
 `app/retrieval.py` adds deterministic TF-IDF + cosine-similarity scoring (pure standard library — no
-embedding model, no vector database, no network call; see the "What must NOT be claimed" additions
-in `docs/interview_evidence.md`). `_validate` (`app/services/workflow.py`) attaches a
+embedding model, no vector database, no network call; see the "What is not claimed here" additions
+in `docs/verification_matrix.md`). `validate_evidence` (`app/services/validate.py`) attaches a
 `relevance_score` to every `Evidence` and records a new `LOW_RELEVANCE_RETRIEVAL` reason code for
-low-scoring candidates. That reason code is added to the existing `_NON_BLOCKING_REASONS` set
+low-scoring candidates. That reason code is added to the existing `NON_BLOCKING_REASONS` set
 alongside `PROMPT_INJECTION_CONTENT` — it changes nothing about admission, resolution, or authority.
 
 `app/guardrails.py` adds a three-checkpoint engine:
 
 - **Input**: `scan_for_injection` replaces the old flat `INJECTION_MARKERS` tuple with a categorized
   `INJECTION_CATEGORY_MARKERS` dict (same seven markers, grouped into `INSTRUCTION_OVERRIDE` /
-  `ROLE_MANIPULATION` / `AUTHORITY_MANIPULATION`) — `_validate` still sets exactly one
+  `ROLE_MANIPULATION` / `AUTHORITY_MANIPULATION`) — `validate_evidence` still sets exactly one
   `PROMPT_INJECTION_CONTENT` reason code, so no existing behaviour changes. `redact_pii` finds and
   masks email/AU-mobile/credit-card-shaped text (regex-based, not a trained DLP classifier) in the
   case's own free-text fields and in evidence excerpts.
-- **Retrieval**: surfaces the `relevance_score` `_validate` already computed — nothing new here.
+- **Retrieval**: surfaces the `relevance_score` `validate_evidence` already computed — nothing new here.
 - **Output**: `generate_case_summary` builds a deterministic, template-based, non-authoritative case
   summary from typed `Claim` objects only — never from raw excerpt text. Each sentence carries the
   evidence/claim IDs it cites *by construction*. `check_groundedness` independently re-verifies every
@@ -42,17 +44,18 @@ alongside `PROMPT_INJECTION_CONTENT` — it changes nothing about admission, res
   exist is the hallucination case, and its sentence is replaced with a safe fallback string rather
   than shown as-is.
 
-`run_guardrails` is called from `run_case_pipeline` right after `_resolve`, before `_authorise`.
-`_authorise`'s signature is untouched — it still reads only `claims` — so this step structurally
-cannot influence the authority decision, the same boundary ADR-0001/0003 enforce for INVESTIGATE.
-Guardrail findings are recorded via the same `_TraceRecorder.record(...)` INVESTIGATE already uses
-(`app.agents.TraceRecorder` / `app.guardrails.GuardrailTraceRecorder` are the same structural
-Protocol), so guardrail activity is folded into the existing SHA-256 trace chain for free.
+`run_guardrails` is called from `run_case_pipeline` right after `resolve_claims`, before
+`authorise_case`. `authorise_case`'s signature is untouched — it still reads only `claims` — so this
+step structurally cannot influence the authority decision, the same boundary ADR-0001/0003 enforce for
+INVESTIGATE. Guardrail findings are recorded via the same `TraceRecorder.record(...)`
+(`app/services/trace.py`) INVESTIGATE already uses (`app.agents.TraceRecorder` /
+`app.guardrails.GuardrailTraceRecorder` are the same structural Protocol), so guardrail activity is
+folded into the existing SHA-256 trace chain for free.
 
 ### A false positive worth recording
 `check_groundedness` was first written to verify citations against the *admitted* evidence set. Running it
 across the full 28-case evaluation dataset (not just the hero case) surfaced two failures:
-`EVAL-CP-CONTRADICTION` and `EVAL-CP-CONTRADICTION-B`. The cause: `_resolve`'s
+`EVAL-CP-CONTRADICTION` and `EVAL-CP-CONTRADICTION-B`. The cause: `resolve_claims`'s
 `MAJOR_FAILURE_ESTABLISHED` claim deliberately cites evidence excluded from `admitted` by a
 `CONTRADICTION_PRESENT` reason code, specifically so the claim can name which sources disagree — that
 is correct, pre-existing audit behaviour, not a hallucination. The fix was to verify citations against
@@ -67,7 +70,7 @@ reference is real," not "this reference was admitted," which is a separate, alre
   The guardrail itself is proven independently, with a hand-constructed violation
   (`tests/test_guardrails.py::test_groundedness_guardrail_blocks_a_fabricated_citation`) — the same
   honest framing ADR-0005 already uses for the `AgentRun` `CheckConstraint` test. Neither this ADR nor
-  `docs/interview_evidence.md` claims the 1.0 is evidence the guardrail would catch a real live-LLM
+  `docs/verification_matrix.md` claims the 1.0 is evidence the guardrail would catch a real live-LLM
   hallucination; that would require an actual live generation adapter, which does not exist here (see
   `docs/production_gap_register.md`).
 - `mean_retrieval_relevance`/`groundedness_pass_rate`/`pii_redaction_count` are computed the same

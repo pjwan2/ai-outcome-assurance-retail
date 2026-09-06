@@ -54,7 +54,7 @@ def test_rag_guardrail_metrics_are_wired_into_evaluation():
     """The generator (app.guardrails.generate_case_summary) only ever cites
     the Claim it was built from, so 1.0 here is expected by construction —
     not a claim that the guardrail is bulletproof, see
-    docs/interview_evidence.md. This test proves the metric is computed end
+    docs/verification_matrix.md. This test proves the metric is computed end
     to end across the full dataset, not just on the hero case."""
     evaluation = run_evaluation()
     assert evaluation["groundedness_pass_rate"] == 1.0

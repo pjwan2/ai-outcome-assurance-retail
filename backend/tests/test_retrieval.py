@@ -1,5 +1,5 @@
 """Unit tests for app.retrieval: deterministic TF-IDF cosine scoring used by
-app.services.workflow._validate to attach Evidence.relevance_score."""
+app.services.validate.validate_evidence to attach Evidence.relevance_score."""
 
 from app.retrieval import build_query, is_low_relevance, score_candidates, tokenize
 
