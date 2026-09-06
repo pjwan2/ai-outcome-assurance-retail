@@ -24,9 +24,13 @@ mistaken for a production claim.
 | Document-owner / scope metadata | No schema field records who owns a document or what scope (team/tenant/department) it belongs to | `SourceSnapshot`/`Evidence` carry `source_class` and `allowed_for_evidence` — authority/class flags, not ownership or scope |
 | Live model behind `app/serving/` | No real inference call anywhere — `DeterministicFakeModel` is hash-seeded and offline by design | The async-serving mechanics (streaming, timeout, cancellation, retry, backpressure, rate limiting) are real; the model behind them is not |
 | Distributed rate limiting / concurrency control | `ConcurrencyLimiter` and `TokenBucketRateLimiter` (`app/serving/`) are in-process, single-instance, in-memory | A multi-replica deployment would need a shared store (e.g. Redis) — not implemented |
+| `ReleaseRecordORM.rollback_of` is still just a field | It has existed since the enterprise-provenance migration with no code that reads or enforces it — setting it changes nothing | Not the same system as `app.model_release` (ADR-0007) below, which *does* implement real rollback — for `backend/app/serving/`'s checkpoints specifically, not the case-assurance evaluation gate this field belongs to |
+| Automatic regression-triggered rollback | `app.model_release.rollback_active_release` is always called explicitly (by a human or an external process) | No continuous health/quality monitoring exists that would detect a regression and call it on its own — see [ADR 0007](adrs/0007-model-release-lifecycle.md) |
+| Model-release gate is a smoke check, not a quality benchmark | `run_release_gate` exercises a candidate against a handful of fixed prompts and checks nothing raises | No real evaluation methodology exists (there is no real model to evaluate — see the `DeterministicFakeModel` row above) |
+| Multi-instance model-release coordination | `get_active_model_info()` is a single process's in-memory cache | A multi-replica deployment would need every instance to share it (or re-read the DB per request) — not implemented |
 
-These five rows exist specifically because a public capability claim must never outrun what this
-repository can independently prove — see `docs/verification_matrix.md`'s "Scope".
+These rows exist specifically because a public capability claim must never outrun what this repository
+can independently prove — see `docs/verification_matrix.md`'s "Scope".
 
 ## Resolved since the previous version of this document
 
@@ -84,3 +88,13 @@ what changed is visible, not silently dropped:
   decision. See `docs/adrs/0006-rag-guardrails-are-non-authoritative.md` and
   `backend/tests/test_guardrails.py`. This is a partial resolution of the vector-infrastructure row
   above, not a full one — see that row for what's still missing.
+- **Real model-release activation and rollback** — `app.model_release` implements
+  CANDIDATE → (gate) → (approval) → ACTIVE, with `SUPERSEDED` (replaced by normal forward progress)
+  kept distinct from `ROLLED_BACK` (explicitly reverted because it was bad), an idempotent rollback
+  operation (same `idempotency_key` pattern as `app/reviews.py::decide_review`), and a real, queryable
+  audit trail (`ModelReleaseAuditEventORM`) for every transition. Activating or rolling back a release
+  changes what `app/serving/router.py::get_model_backend` actually serves, proven end to end by
+  `tests/test_model_release.py::test_real_requests_observe_activation_and_rollback_end_to_end` — not
+  just a database row, which is exactly what the new gap rows above are careful to say this is *not*
+  a claim of (no automatic regression detection, gate is a smoke check, single-process only). See
+  [ADR 0007](adrs/0007-model-release-lifecycle.md).

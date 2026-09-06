@@ -176,6 +176,25 @@ users, each simulated caller its own authenticated principal; see
 [`docs/performance_report.md`](performance_report.md) for the real results, including the concurrency
 limiter's throughput ceiling confirmed quantitatively.
 
+## Model-release lifecycle
+
+`app/model_release.py` gives `app/serving/`'s checkpoints a real
+`CANDIDATE → (gate) → (approval) → ACTIVE → SUPERSEDED | ROLLED_BACK` lifecycle
+(`ModelReleaseORM`), deliberately separate from `app/orm_models.py::ReleaseRecordORM` (the
+case-assurance evaluation gate's result record, whose own `rollback_of` field remains unenforced — see
+`docs/production_gap_register.md`). `run_release_gate` exercises a candidate model against a fixed
+synthetic prompt set (a smoke check, not a quality benchmark); `activate_release` fails closed if the
+gate hasn't passed or a human hasn't called `approve_release`. A release replaced by ordinary forward
+progress is `SUPERSEDED`; one explicitly reverted away from because it was bad is `ROLLED_BACK` — a
+deliberate distinction so the audit trail (`ModelReleaseAuditEventORM`) can tell the two apart.
+`rollback_active_release` is idempotent via the same `idempotency_key` pattern
+`app/reviews.py::decide_review` already uses. Critically, `get_active_model_info()` is what
+`app/serving/router.py::get_model_backend` reads on every request to build the served
+`ModelInfo`(`model_name`/`checkpoint_id`) — activating or rolling back a release therefore changes what
+a real HTTP request observes, proven end to end by
+`tests/test_model_release.py::test_real_requests_observe_activation_and_rollback_end_to_end`, not just a
+database row. See [ADR 0007](adrs/0007-model-release-lifecycle.md).
+
 ## Auth boundary
 
 `app/auth.py::require_auth` is a FastAPI dependency gating every mutating endpoint. It resolves a

@@ -35,7 +35,7 @@ Full architecture, including the control-boundary diagram (why the model never o
 ```bash
 make setup
 make migrate
-make test        # 87 tests
+make test        # 99 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON
@@ -111,6 +111,11 @@ dev token automatically; set `API_TOKENS` in `.env` for anything beyond a solo l
   model/checkpoint version on every response, structured JSON logs, and Prometheus metrics at
   `GET /metrics`. No live model call anywhere — see `docs/production_gap_register.md`. Load-tested with
   Locust at 10/50/100 concurrent users — see [`docs/performance_report.md`](docs/performance_report.md).
+- **Model-release lifecycle** (`backend/app/model_release.py`): a checkpoint goes
+  CANDIDATE → gate → human approval → ACTIVE, can't skip the gate or the approval (both fail closed),
+  and a bad release can be rolled back to the previous known-good one — idempotently, with a real
+  queryable audit trail, and provably changing what `POST /api/generate/stream` actually serves, not
+  just a database row. See [ADR 0007](docs/adrs/0007-model-release-lifecycle.md).
 
 Full docs: [`docs/architecture.md`](docs/architecture.md) ·
 [`docs/demo_runbook.md`](docs/demo_runbook.md) ·
