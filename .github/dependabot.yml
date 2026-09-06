@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # backend/requirements.txt (runtime) and requirements-dev.txt (test/lint/
+  # load-test tooling) — pip-audit in CI catches known CVEs on every push;
+  # Dependabot catches new releases (security or otherwise) on a schedule,
+  # the two are complementary, not redundant.
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
