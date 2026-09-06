@@ -98,9 +98,10 @@
   bump). `npm audit` has one remaining accepted finding: `esbuild`/`vite`
   (moderate) — a dev-server-only exposure with no effect on the built static
   assets actually served in production — whose only fix is a breaking `vite` v8
-  major upgrade, not taken in this pass; the CI step reports it
-  (`continue-on-error: true`) rather than either hiding it or blocking on an
-  unreviewed breaking change.
+  major upgrade, not taken in this pass. CI runs `npm audit --audit-level=high`
+  with no `continue-on-error`: that threshold already ignores this known
+  moderate finding, so it isn't silently passed over, but a real future
+  high/critical finding fails the build.
 - **Docker build verified end-to-end.** `docker compose up --build` built both images; the backend ran
   its Alembic migration on boot (all 5 revisions), `GET /health`, `POST /api/cases`, `GET
   /api/cases/{id}/trace/verify` (`chain_verified: true`), and `GET /api/cases/{id}/guardrails` were all

@@ -6,7 +6,7 @@ No self-assessed seniority claims below — only what is runnable and where.
 
 This matrix covers only the capabilities independently reproducible in this public repository. Other
 private or earlier work is outside its verification scope. The count below is whatever `make test` /
-`pytest -q` prints right now (`backend/tests/`) — currently 87 passing tests — never a number quoted
+`pytest -q` prints right now (`backend/tests/`) — currently 99 passing tests — never a number quoted
 from memory. See `docs/production_gap_register.md` for the maintained list of what this repository
 does not implement.
 
@@ -74,12 +74,12 @@ does not implement.
 
 ## PROPOSED FOR ENTERPRISE PRODUCTION
 
-See `docs/production_gap_register.md` in full for the current, maintained list — as of this writing:
-enterprise IAM/SSO, PII/data-retention policy, distributed queues/tracing, real retailer/CRM
-integration, live OpenAI/Anthropic model adapters, legal/compliance accreditation, cross-case
-long-term memory, production-scale vector infrastructure. (Containerisation, CI/CD, multi-case intake,
-`CaseStatus` enforcement, trace hash chaining, and bounded multi-agent investigation are now resolved
-— see that file's "Resolved since the previous version" section, not this stale list.)
+`docs/production_gap_register.md` is the single maintained list of what's proposed but not
+implemented — not duplicated here, so this section can't drift out of sync with it the way an inline
+list would. That file's own "Resolved since the previous version" section tracks what moved from gap
+to implemented (most recently: RAG retrieval scoring and the guardrails engine, and the model-release
+activation/rollback lifecycle) — check there rather than assuming anything listed in either section is
+still accurate months later.
 
 ## Precisely scoped claims
 
