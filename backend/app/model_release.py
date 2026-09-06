@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.orm_models import ModelReleaseAuditEventORM, ModelReleaseORM
@@ -92,6 +93,24 @@ class NoPreviousReleaseError(ModelReleaseError):
         super().__init__(f"Active ModelRelease '{release_id}' has no previous_release_id to roll back to")
 
 
+class ConcurrentActivationError(ModelReleaseError):
+    """Raised when the database's at-most-one-ACTIVE-release constraint
+    (`uq_model_release_single_active` on `ModelReleaseORM`) rejects a commit —
+    meaning another process activated a different release in the window
+    between this call's own read of the current active release and its
+    commit. There is no single correct release to fall back to
+    automatically here (unlike rollback's idempotency-key race, this is two
+    genuinely different intended outcomes, not two retries of the same one),
+    so this fails closed rather than guessing."""
+
+    def __init__(self, release_id: str) -> None:
+        self.release_id = release_id
+        super().__init__(
+            f"Another release was activated concurrently while activating '{release_id}' — "
+            "re-check the current active release before retrying"
+        )
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -153,6 +172,34 @@ def _get_active_row(session: Session) -> ModelReleaseORM | None:
     return session.query(ModelReleaseORM).filter_by(status=ModelReleaseStatus.ACTIVE.value).one_or_none()
 
 
+def _find_rollback_event(session: Session, idempotency_key: str) -> ModelReleaseAuditEventORM | None:
+    return (
+        session.query(ModelReleaseAuditEventORM)
+        .filter_by(event_type="ROLLED_BACK", idempotency_key=idempotency_key)
+        .one_or_none()
+    )
+
+
+def hydrate_active_cache_from_db(session: Session) -> ActiveModelInfo:
+    """Read whichever release is currently ACTIVE in the database and use it
+    to initialise `_ACTIVE_CACHE`. Call this once at process startup (see
+    `app.api`'s `lifespan`).
+
+    Without this, a real gap existed: `_ACTIVE_CACHE` only started as the
+    hard-coded bootstrap info and was only ever updated in-memory by
+    `activate_release`/`rollback_active_release` — so a process restart after
+    activating checkpoint B would silently go back to serving the bootstrap
+    checkpoint, even though the database still correctly recorded B as
+    ACTIVE. `test_hydrate_active_cache_from_db_restores_the_active_release_
+    after_a_simulated_restart` in tests/test_model_release.py is the
+    regression test for exactly this. Falls back to leaving the bootstrap
+    cache in place if no release has ever been activated."""
+    active_row = _get_active_row(session)
+    if active_row is not None:
+        _sync_cache(active_row)
+    return _ACTIVE_CACHE
+
+
 def get_release(session: Session, release_id: str) -> ModelReleaseORM:
     release = session.get(ModelReleaseORM, release_id)
     if release is None:
@@ -212,11 +259,19 @@ def approve_release(session: Session, release: ModelReleaseORM, *, approved_by: 
 
 
 def activate_release(session: Session, release: ModelReleaseORM, *, activated_by: str) -> ModelReleaseORM:
-    """Atomically (within one DB transaction) make `release` the active one:
-    fails closed if the gate hasn't passed or it hasn't been approved, and
-    demotes whatever was previously ACTIVE to SUPERSEDED — a release only
-    becomes ROLLED_BACK through an explicit rollback, never through being
-    superseded by normal forward progress."""
+    """Make `release` the active one within one DB transaction: fails closed
+    if the gate hasn't passed or it hasn't been approved, and demotes
+    whatever was previously ACTIVE to SUPERSEDED — a release only becomes
+    ROLLED_BACK through an explicit rollback, never through being superseded
+    by normal forward progress.
+
+    "Atomic" here means one transaction updates both rows together, not that
+    concurrent activations are impossible: `current_active` below is read
+    before this transaction commits, so two racing calls can each read "no
+    active release" (or the same current one) and both attempt to commit an
+    ACTIVE row. `ModelReleaseORM`'s `uq_model_release_single_active` database
+    constraint is the actual backstop for that — see `ConcurrentActivationError`.
+    """
     if release.status != ModelReleaseStatus.CANDIDATE.value:
         raise ReleaseNotCandidateError(release.release_id, release.status)
     if not release.gate_passed:
@@ -227,13 +282,25 @@ def activate_release(session: Session, release: ModelReleaseORM, *, activated_by
     current_active = _get_active_row(session)
     if current_active is not None:
         current_active.status = ModelReleaseStatus.SUPERSEDED.value
+        # Flush the demotion before setting the new release ACTIVE below: in
+        # the same flush, SQLAlchemy does not guarantee this UPDATE runs
+        # before that one, and uq_model_release_single_active is checked
+        # per-statement (SQLite/Postgres do not defer UNIQUE checks to
+        # commit) — without ordering it explicitly, a legitimate, single-
+        # writer activation could transiently have two ACTIVE rows mid-flush
+        # and spuriously raise ConcurrentActivationError against itself.
+        session.flush()
 
     release.status = ModelReleaseStatus.ACTIVE.value
     release.activated_by = activated_by
     release.activated_at = _now()
     release.previous_release_id = current_active.release_id if current_active else None
     _record_audit(session, release.release_id, "ACTIVATED", actor=activated_by)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise ConcurrentActivationError(release.release_id) from None
     _sync_cache(release)
     return release
 
@@ -245,12 +312,17 @@ def rollback_active_release(session: Session, *, activated_by: str, idempotency_
     re-mutating state or writing a second audit event. A *different*
     idempotency_key always attempts a fresh rollback of whatever is
     currently active — rolling back twice for two different real incidents
-    is a normal, supported operation, not a repeat of the same one."""
-    existing_event = (
-        session.query(ModelReleaseAuditEventORM)
-        .filter_by(event_type="ROLLED_BACK", idempotency_key=idempotency_key)
-        .one_or_none()
-    )
+    is a normal, supported operation, not a repeat of the same one.
+
+    The "does this event already exist?" check below and this function's own
+    commit are two separate steps, not one atomic operation — two concurrent
+    retries of the *same* request can both pass that check before either
+    commits. `ModelReleaseAuditEventORM.idempotency_key`'s database-level
+    unique constraint is the actual backstop; the `except IntegrityError`
+    branch below turns that race into the same idempotent result a caller
+    would have gotten from the early-return path above, instead of leaking a
+    raw DB error from a call that is supposed to be safe to retry."""
+    existing_event = _find_rollback_event(session, idempotency_key)
     if existing_event is not None:
         return get_release(session, existing_event.release_id)
 
@@ -263,6 +335,11 @@ def rollback_active_release(session: Session, *, activated_by: str, idempotency_
     previous = get_release(session, current_active.previous_release_id)
     current_active.status = ModelReleaseStatus.ROLLED_BACK.value
     current_active.rolled_back_at = _now()
+    # Same ordering hazard as activate_release: flush the demotion before
+    # promoting `previous` to ACTIVE, or uq_model_release_single_active can
+    # transiently see two ACTIVE rows within this single flush and reject a
+    # legitimate rollback against itself.
+    session.flush()
     previous.status = ModelReleaseStatus.ACTIVE.value
     previous.activated_by = activated_by
     previous.activated_at = _now()
@@ -274,6 +351,13 @@ def rollback_active_release(session: Session, *, activated_by: str, idempotency_
         idempotency_key=idempotency_key,
         detail={"rolled_back_from": current_active.release_id},
     )
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        winning_event = _find_rollback_event(session, idempotency_key)
+        if winning_event is None:
+            raise  # some other integrity violation - not the race this handles
+        return get_release(session, winning_event.release_id)
     _sync_cache(previous)
     return previous

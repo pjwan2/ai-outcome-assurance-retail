@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -401,6 +402,20 @@ class ModelReleaseORM(Base):
             "status in ('CANDIDATE', 'ACTIVE', 'SUPERSEDED', 'ROLLED_BACK')",
             name="ck_model_release_status",
         ),
+        # "Activation is atomic" was documented before this existed but only
+        # meant "one transaction updates both rows" — it did not stop two
+        # concurrent activations (different processes/requests) from each
+        # reading "nothing is active yet" and both committing an ACTIVE row.
+        # This partial unique index is the actual invariant: the database
+        # itself refuses a second ACTIVE row, independent of whatever
+        # app.model_release.activate_release happened to read beforehand.
+        Index(
+            "uq_model_release_single_active",
+            "status",
+            unique=True,
+            sqlite_where=text("status = 'ACTIVE'"),
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
     )
 
 
@@ -418,6 +433,16 @@ class ModelReleaseAuditEventORM(Base):
     )
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     actor: Mapped[str | None] = mapped_column(String, nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # unique, not just indexed: two concurrent retries of the same rollback
+    # request (same idempotency_key) can both pass an application-level
+    # "does this event already exist?" check before either commits — this is
+    # the actual backstop. NULL is exempt from SQL uniqueness (every
+    # non-rollback event type passes None here), so this only constrains
+    # rollback's own key space, not every audit event.
+    idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True)
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_model_release_audit_events_idempotency_key"),
+    )

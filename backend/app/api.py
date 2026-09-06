@@ -14,6 +14,7 @@ from app.agents import REGISTERED_AGENTS
 from app.auth import Principal, require_auth
 from app.db import Base, SessionLocal, engine
 from app.evaluation import run_evaluation
+from app.model_release import hydrate_active_cache_from_db
 from app.models import TraceEvent
 from app.orm_models import AgentRunORM, CaseORM, GuardrailReportORM, ReviewTaskORM
 from app.persistence import (
@@ -35,6 +36,16 @@ from app.serving.router import router as serving_router
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     Base.metadata.create_all(bind=engine)
+    # Without this, a restart would silently revert served traffic to the
+    # hard-coded bootstrap checkpoint even if the database still records a
+    # different release as ACTIVE — see hydrate_active_cache_from_db's
+    # docstring and the restart-simulation regression test in
+    # tests/test_model_release.py.
+    session = SessionLocal()
+    try:
+        hydrate_active_cache_from_db(session)
+    finally:
+        session.close()
     yield
 
 

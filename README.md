@@ -35,7 +35,7 @@ Full architecture, including the control-boundary diagram (why the model never o
 ```bash
 make setup
 make migrate
-make test        # 99 tests
+make test        # 105 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON

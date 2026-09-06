@@ -163,21 +163,28 @@ def test_deadline_covers_the_full_stream_not_just_the_first_token(client):
     """Regression: an earlier version only bounded the pre-stream "prime"
     step with the timeout, so a model that produced its first token quickly
     but then stalled could run well past `timeout_seconds` in total. The
-    deadline must cover every subsequent token too."""
-    # First token arrives well within the timeout; the full 10-token stream
-    # (10 * 0.05s = 0.5s) does not.
-    with _model_override(DeterministicFakeModel(token_delay_seconds=0.05, num_tokens=10)):
+    deadline must cover every subsequent token too.
+
+    The first-token delay is a small fraction of the timeout (not a near
+    match) deliberately: an earlier version used 0.05s vs a 0.12s timeout,
+    which was tight enough that a busy CI runner could occasionally miss the
+    first token's own deadline check and produce a flaky failure unrelated
+    to the behaviour under test. A wide margin here still proves the same
+    thing — mid-stream enforcement — without being a timing race."""
+    # First token arrives comfortably within the timeout (25x margin); the
+    # full 30-token stream (30 * 0.05s = 1.5s) does not.
+    with _model_override(DeterministicFakeModel(token_delay_seconds=0.05, num_tokens=30)):
         resp = client.post(
-            "/api/generate/stream", headers=AUTH_HEADERS, json={"prompt": "x", "timeout_seconds": 0.12}
+            "/api/generate/stream", headers=AUTH_HEADERS, json={"prompt": "x", "timeout_seconds": 1.0}
         )
     assert resp.status_code == 200
     events = _parse_sse(resp.text)
     assert events[-1][0] == "error"
     assert events[-1][1]["reason"] == "TIMEOUT"
-    # Some tokens got through before the deadline hit, but not all 10 —
+    # Some tokens got through before the deadline hit, but not all 30 —
     # proves the deadline was enforced mid-stream, not just once at the start.
     token_count = sum(1 for e, _ in events if e == "token")
-    assert 0 < token_count < 10
+    assert 0 < token_count < 30
 
 
 # --- Rate limiting: keyed by principal, not client-supplied session_id -----

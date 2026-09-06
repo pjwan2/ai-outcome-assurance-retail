@@ -109,7 +109,7 @@
   `continue-on-error`, so a real future finding fails the build instead of
   being silently passed.
 - **Docker build verified end-to-end.** `docker compose up --build` built both images; the backend ran
-  its Alembic migration on boot (all 5 revisions), `GET /health`, `POST /api/cases`, `GET
+  `alembic upgrade head` on boot (succeeded), `GET /health`, `POST /api/cases`, `GET
   /api/cases/{id}/trace/verify` (`chain_verified: true`), and `GET /api/cases/{id}/guardrails` were all
   exercised against the running containers, and the frontend container served the built SPA (HTTP 200).
   Re-verified after the RAG guardrails work landed, not a stale claim from before it existed.

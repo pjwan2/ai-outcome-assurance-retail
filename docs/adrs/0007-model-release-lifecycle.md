@@ -32,15 +32,35 @@ CANDIDATE -> (gate) -> (human approval) -> ACTIVE -> SUPERSEDED (normal forward 
   `ROLLED_BACK`. Collapsing these into one status would make an audit trail unable to distinguish "we
   shipped v2" from "we shipped v2 and it was bad" — a real difference for anyone reading the history
   later.
-- **Activation is atomic within one DB transaction**: the previously-active release (if any) is demoted
-  to `SUPERSEDED` and the new one promoted to `ACTIVE` in the same `session.commit()`, so there is never
-  a moment with zero or two active releases visible to a concurrent reader of the same session.
+- **Activation updates both rows in one DB transaction**, and — a real gap found and fixed after this
+  ADR's first version — **"at most one ACTIVE release" is now a database constraint, not just an
+  ordering promise**: a partial unique index (`uq_model_release_single_active`, `ModelReleaseORM.status`
+  where `status = 'ACTIVE'`) means two racing activations (each reading "no active release" before
+  either commits) cannot both succeed — the loser's commit raises an `IntegrityError`, which
+  `activate_release` turns into a typed `ConcurrentActivationError` rather than letting a raw DB
+  exception escape or, worse, silently leaving two ACTIVE rows. This is a genuine conflict with no
+  single correct automatic resolution (unlike the rollback race below), so it fails closed. Note this
+  required an implementation detail: within one transaction, the demotion to `SUPERSEDED` must be
+  flushed *before* the new release is set `ACTIVE`, or SQLAlchemy's flush ordering can transiently
+  present two ACTIVE rows to the same partial index mid-flush and reject a legitimate,
+  non-concurrent activation against itself.
+- **The process-local cache survives a restart.** A second real gap: `_ACTIVE_CACHE` previously only
+  ever started from the hard-coded bootstrap value, updated only by `activate_release`/
+  `rollback_active_release` — so a process restart after activating a real checkpoint would silently
+  revert served traffic to bootstrap even though the database still recorded a different release as
+  ACTIVE. `hydrate_active_cache_from_db`, called once from `app.api`'s `lifespan` on startup, reads
+  whichever release is actually ACTIVE in the database and initialises the cache from it.
 - **Rollback is idempotent via the same `idempotency_key` pattern `app/reviews.py::decide_review`
   already uses** in this codebase: replaying the same `(idempotency_key)` after a successful rollback
   returns the prior result without a second audit event or a second state flip — safe against a client
   retrying after a network failure. A *different* idempotency_key always attempts a fresh rollback of
   whatever is currently active; rolling back is a normal, repeatable operation across the service's
-  lifetime, not a one-time action.
+  lifetime, not a one-time action. This idempotency is now also database-enforced: a unique constraint
+  on `ModelReleaseAuditEventORM.idempotency_key` means two concurrent retries of the *same* rollback
+  request that both pass the application-level pre-check (a real possibility — that check and the
+  eventual commit are two separate steps) cannot both write an audit row; the loser's `IntegrityError`
+  is caught and reconciled into the same result the winner produced, instead of a raw DB error reaching
+  a caller that is supposed to be able to retry safely.
 - **Activation and rollback are queryable audits, not log lines**: `ModelReleaseAuditEventORM` records
   every `REGISTERED`/`GATE_RUN`/`APPROVED`/`ACTIVATED`/`ROLLED_BACK` transition with an actor and
   detail payload.
@@ -64,6 +84,10 @@ CANDIDATE -> (gate) -> (human approval) -> ACTIVE -> SUPERSEDED (normal forward 
   thresholds) and is listed as a gap, not implied by this ADR.
 - The release gate is a smoke check against a deterministic fake model, not a quality/regression
   benchmark against a real model's behaviour — see `docs/production_gap_register.md`.
-- This is single-process, in-memory-cache-backed, consistent with the rest of `app/serving/`'s honesty
-  about not being distributed infrastructure — a multi-instance deployment would need every instance to
-  either share the cache or re-read the DB per request, neither of which is implemented here.
+- The read path (`get_active_model_info()`) is still a single process's in-memory cache, consistent
+  with the rest of `app/serving/`'s honesty about not being distributed infrastructure: the database is
+  now safe to share across instances (at most one ACTIVE row is enforced there directly), but one
+  instance activating or rolling back a release does not push that change to another instance's
+  cache — it would only pick it up on its own next restart (via `hydrate_active_cache_from_db`). A
+  multi-instance deployment would need every instance to either share the cache or re-read the DB per
+  request, neither of which is implemented here.

@@ -6,7 +6,7 @@ No self-assessed seniority claims below — only what is runnable and where.
 
 This matrix covers only the capabilities independently reproducible in this public repository. Other
 private or earlier work is outside its verification scope. The count below is whatever `make test` /
-`pytest -q` prints right now (`backend/tests/`) — currently 99 passing tests — never a number quoted
+`pytest -q` prints right now (`backend/tests/`) — currently 105 passing tests — never a number quoted
 from memory. See `docs/production_gap_register.md` for the maintained list of what this repository
 does not implement.
 
@@ -33,13 +33,16 @@ does not implement.
 | `TraceEvent` SHA-256 hash chain (tamper/reorder detection) | `app/services/trace.py::TraceRecorder`, `verify_trace_chain()` | `pytest tests/test_trace_chain.py`, `GET /api/cases/{case_id}/trace/verify` |
 | Counter-evidence linked on contradictory claims | `app/services/resolve.py::resolve_claims` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
 | Ruff + mypy clean | — | `make lint`, `make typecheck` |
-| 99 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| 105 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
 | Model-serving slice: bearer-token-authenticated async SSE streaming, one deadline covering the whole request (queue wait + first token + full stream, not just the first token), client-disconnect releases its concurrency slot, bounded concurrency/backpressure (503), rate limiting keyed by authenticated principal not client-supplied session_id (429), retry-then-graceful-failure on both pre-stream and mid-stream backend errors, model/checkpoint version on every response | `app/serving/` (`model_backend.py`, `concurrency.py`, `rate_limit.py`, `streaming.py`, `router.py`) | `pytest tests/test_serving.py` (19 tests) |
 | Rate-limit key cannot be spoofed by rotating session_id; a real bug found and fixed | `app/serving/router.py::generate_stream` keys `RATE_LIMITER.check` on `principal.reviewer_id` | `pytest tests/test_serving.py::test_rate_limit_is_keyed_by_principal_not_client_supplied_session_id` |
 | Fake-model failure injection is a dependency override, not a public request field — a real bug found and fixed | `app/serving/router.py::get_model_backend`, `DeterministicFakeModel.fail_mode` (construction-time only) | `pytest tests/test_serving.py -k failure_recovers or exhausts_retries or mid_stream_failure` |
 | Structured JSON logs and Prometheus metrics for the serving slice, exposed over real HTTP | `app/serving/logging_utils.py`, `app/serving/metrics.py`, `GET /metrics` | `pytest tests/test_serving.py -k "metrics or structured_log"` |
 | No live model call anywhere in the serving slice — a deterministic, hash-seeded fake model | `app/serving/model_backend.py::DeterministicFakeModel` | `pytest tests/test_serving.py::test_repeated_prompt_is_deterministic` |
-| Model-release lifecycle: cannot activate without passing the gate, cannot activate without approval, activation is atomic and demotes the previous active release, rollback restores the previous known-good checkpoint, repeated rollback with the same idempotency key is a no-op, rollback writes a real queryable audit record | `app/model_release.py`, `ModelReleaseORM`/`ModelReleaseAuditEventORM` | `pytest tests/test_model_release.py` (12 tests) |
+| Model-release lifecycle: cannot activate without passing the gate, cannot activate without approval, activation demotes the previous active release, rollback restores the previous known-good checkpoint, repeated rollback with the same idempotency key is a no-op, rollback writes a real queryable audit record | `app/model_release.py`, `ModelReleaseORM`/`ModelReleaseAuditEventORM` | `pytest tests/test_model_release.py` (18 tests) |
+| The active release survives a process restart — a real gap found and fixed, not a claim included from the start | `app/model_release.py::hydrate_active_cache_from_db`, called from `app.api`'s `lifespan` on startup | `pytest tests/test_model_release.py::test_hydrate_active_cache_from_db_restores_the_active_release_after_a_simulated_restart` |
+| "At most one ACTIVE release" and rollback's idempotency key are database constraints, not just application code checking before it writes — proven by writing directly to the database, bypassing the application entirely | `ModelReleaseORM`'s `uq_model_release_single_active` partial unique index, `ModelReleaseAuditEventORM.idempotency_key`'s unique constraint | `pytest tests/test_model_release.py -k "database_rejects"` |
+| A genuine concurrent-activation race surfaces as a typed `ConcurrentActivationError`, not a raw leaked database exception; a genuine concurrent-rollback race on the same idempotency key reconciles to the same idempotent result instead of erroring | `app/model_release.py::activate_release`/`rollback_active_release` | `pytest tests/test_model_release.py -k "concurrent_activation_race or reconciles_a_lost_race"` |
 | Activating or rolling back a model release changes what a real HTTP request observes, not just a database row | `app/serving/router.py::get_model_backend` reads `app.model_release.get_active_model_info()` on every request | `pytest tests/test_model_release.py::test_real_requests_observe_activation_and_rollback_end_to_end` |
 | `SUPERSEDED` (normal forward progress) is kept distinct from `ROLLED_BACK` (explicit revert) in the audit trail | `app/model_release.py::activate_release`/`rollback_active_release` | `pytest tests/test_model_release.py::test_second_activation_supersedes_not_rolls_back_the_first` |
 | Dependency vulnerabilities found and fixed, not just scanned: `pip-audit` surfaced 7 CVEs against the previously-resolved `starlette==0.50.0`; fixed by pairing `fastapi==0.141.1` with `starlette==1.6.0` (the first fastapi release with no `starlette<0.51` ceiling), full suite re-verified green after | `backend/requirements.txt`, `docs/security.md` | `pip-audit -r requirements.txt` → "No known vulnerabilities found" |
@@ -52,7 +55,7 @@ does not implement.
 | CI passing on GitHub Actions (backend + frontend) | `.github/workflows/ci.yml` | https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354 — both jobs green |
 | Four runnable fixture cases, `case_id` actually respected | `app/fixtures/cases/CASE-RET-00{2,3,4}.json`, `app/services/workflow.py::load_case_fixture` | `pytest tests/test_api.py::test_list_case_fixtures_and_run_a_non_hero_case` |
 | Bearer-token auth + role-checked review decisions | `app/auth.py::require_auth`, `app/api.py::post_review_decision` | `pytest tests/test_api.py::test_create_case_requires_auth`, `::test_wrong_role_cannot_decide_review` |
-| Docker build + run verified end-to-end (not just written) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` | `docker compose up --build`, then `curl localhost:8000/health`. Actually executed: both images built, backend ran its Alembic migration on boot (log confirms all 5 revisions applying), `/health` returned `{"status":"ok"}`, `POST /api/cases` created the hero case, `GET /api/cases/CASE-RET-001/trace/verify` returned `chain_verified: true` (28 events), `GET /api/cases/CASE-RET-001/guardrails` returned a populated report, and the frontend container served the built SPA with HTTP 200 — all against the running containers, not assumed |
+| Docker build + run verified end-to-end (not just written) | `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` | `docker compose up --build`, then `curl localhost:8000/health`. Actually executed: both images built, backend ran `alembic upgrade head` on boot (succeeded), `/health` returned `{"status":"ok"}`, `POST /api/cases` created the hero case, `GET /api/cases/CASE-RET-001/trace/verify` returned `chain_verified: true` (28 events), `GET /api/cases/CASE-RET-001/guardrails` returned a populated report, and the frontend container served the built SPA with HTTP 200 — all against the running containers, not assumed |
 | Deterministic TF-IDF + cosine relevance scoring on every retrieved candidate (no embedding model/vector DB) | `app/retrieval.py::score_candidates`, wired into `app/services/validate.py::validate_evidence` | `pytest tests/test_retrieval.py` |
 | Low-relevance retrieval flagged but non-blocking, same treatment as prompt injection | `app/services/validate.py::NON_BLOCKING_REASONS` | `pytest tests/test_guardrails.py::test_low_relevance_is_flagged_but_never_blocks_admission` |
 | Categorized prompt-injection detection (was a flat marker list) | `app/guardrails.py::scan_for_injection`, `INJECTION_CATEGORY_MARKERS` | `pytest tests/test_guardrails.py::test_scan_for_injection_categorizes_instruction_override` |
@@ -152,8 +155,11 @@ Each of these is true only in the specific scope stated — the scope is the poi
   deterministic smoke check (nothing raises, every fixed prompt yields a token) against a fake model
   that cannot meaningfully vary in "quality" between checkpoints. No claim of automatic
   regression-triggered rollback — `rollback_active_release` is always called explicitly, never by
-  continuous monitoring on its own. No claim that this coordinates across multiple instances —
-  `get_active_model_info()` is one process's in-memory cache. See
+  continuous monitoring on its own. No claim that the *read path* coordinates across multiple
+  instances — `get_active_model_info()` is one process's in-memory cache, only ever re-synced with the
+  database at that process's own startup; the database itself does enforce at most one ACTIVE row
+  regardless of how many instances write to it (`uq_model_release_single_active`), but one instance's
+  activation is not pushed to another instance's cache. See
   [ADR 0007](adrs/0007-model-release-lifecycle.md) and `docs/production_gap_register.md`.
 - No claim that `ReleaseRecordORM.rollback_of` (the case-assurance evaluation gate, unrelated to
   `app.model_release`) does anything — it remains an unenforced field, exactly as before.

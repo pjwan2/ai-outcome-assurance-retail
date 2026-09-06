@@ -193,7 +193,12 @@ deliberate distinction so the audit trail (`ModelReleaseAuditEventORM`) can tell
 `ModelInfo`(`model_name`/`checkpoint_id`) — activating or rolling back a release therefore changes what
 a real HTTP request observes, proven end to end by
 `tests/test_model_release.py::test_real_requests_observe_activation_and_rollback_end_to_end`, not just a
-database row. See [ADR 0007](adrs/0007-model-release-lifecycle.md).
+database row. `hydrate_active_cache_from_db` re-syncs that cache from the database at process startup,
+so a restart doesn't silently fall back to the bootstrap checkpoint; a partial unique index on
+`ModelReleaseORM.status` and a unique constraint on the audit table's `idempotency_key` make "at most
+one ACTIVE release" and rollback idempotency real database guarantees, not just an ordering promise —
+see [ADR 0007](adrs/0007-model-release-lifecycle.md) for both, including two real bugs found while
+adding them.
 
 ## Auth boundary
 

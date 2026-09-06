@@ -27,7 +27,7 @@ mistaken for a production claim.
 | `ReleaseRecordORM.rollback_of` is still just a field | It has existed since the enterprise-provenance migration with no code that reads or enforces it — setting it changes nothing | Not the same system as `app.model_release` (ADR-0007) below, which *does* implement real rollback — for `backend/app/serving/`'s checkpoints specifically, not the case-assurance evaluation gate this field belongs to |
 | Automatic regression-triggered rollback | `app.model_release.rollback_active_release` is always called explicitly (by a human or an external process) | No continuous health/quality monitoring exists that would detect a regression and call it on its own — see [ADR 0007](adrs/0007-model-release-lifecycle.md) |
 | Model-release gate is a smoke check, not a quality benchmark | `run_release_gate` exercises a candidate against a handful of fixed prompts and checks nothing raises | No real evaluation methodology exists (there is no real model to evaluate — see the `DeterministicFakeModel` row above) |
-| Multi-instance model-release coordination | `get_active_model_info()` is a single process's in-memory cache | A multi-replica deployment would need every instance to share it (or re-read the DB per request) — not implemented |
+| Multi-instance model-release coordination | `get_active_model_info()` is a single process's in-memory cache, hydrated from the database only at that process's own startup (`hydrate_active_cache_from_db`) | A second instance activating or rolling back a release does not push that change to this instance's cache — it would only pick it up on its own next restart. The database itself is now safe to share (see the "Resolved" entry below — at most one ACTIVE row is DB-enforced), but the in-memory read path is not; a multi-replica deployment would need every instance to share the cache (or re-read the DB per request) — not implemented |
 
 These rows exist specifically because a public capability claim must never outrun what this repository
 can independently prove — see `docs/verification_matrix.md`'s "Scope".
@@ -49,8 +49,8 @@ what changed is visible, not silently dropped:
   `tests/test_trace_chain.py`. Exposed via `GET /api/cases/{case_id}/trace/verify`.
 - **Containerisation** — `backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml` added and
   **build-verified end-to-end**, re-run and re-confirmed after the RAG guardrails work landed:
-  `docker compose up --build` built both images, the backend ran its Alembic migration on boot (log
-  shows all 5 revisions applying, including the guardrail-report migration), `GET /health` returned
+  `docker compose up --build` built both images, the backend ran `alembic upgrade head` on boot
+  (succeeded — not pinning a revision count here, since it changes as migrations are added), `GET /health` returned
   `{"status":"ok"}`, `POST /api/cases` created the hero case, `GET
   /api/cases/CASE-RET-001/trace/verify` returned `chain_verified: true`, `GET
   /api/cases/CASE-RET-001/guardrails` returned a populated report, and the frontend container served
@@ -98,3 +98,24 @@ what changed is visible, not silently dropped:
   just a database row, which is exactly what the new gap rows above are careful to say this is *not*
   a claim of (no automatic regression detection, gate is a smoke check, single-process only). See
   [ADR 0007](adrs/0007-model-release-lifecycle.md).
+- **Model-release survives a restart, and "at most one ACTIVE" is a real database constraint** — two
+  real gaps found while hardening the module above, not present when it first landed:
+  (1) `_ACTIVE_CACHE` only ever started from the hard-coded bootstrap value and was only updated
+  in-memory by `activate_release`/`rollback_active_release`, so a process restart after activating a
+  real checkpoint would silently revert served traffic to bootstrap even though the database still
+  correctly recorded a different release as ACTIVE — fixed by `hydrate_active_cache_from_db`, called
+  from `app.api`'s `lifespan` on startup, proven by
+  `tests/test_model_release.py::test_hydrate_active_cache_from_db_restores_the_active_release_after_a_simulated_restart`.
+  (2) "activation is atomic" previously meant only "one transaction updates both rows," not that
+  concurrent activations were impossible — two racing calls could each read "no active release" and
+  both commit an ACTIVE row, corrupting the single-active invariant with no error raised. Fixed with a
+  partial unique index (`uq_model_release_single_active`, ACTIVE-only) on `ModelReleaseORM.status` and a
+  unique constraint on `ModelReleaseAuditEventORM.idempotency_key`, with the resulting `IntegrityError`
+  turned into a typed `ConcurrentActivationError` (activation — a genuine conflict, fails closed) or a
+  reconciled idempotent result (rollback — a retry of the same request, resolves to the same answer).
+  Proven by `tests/test_model_release.py::test_database_rejects_a_second_active_release_independent_of_application_code`,
+  `::test_database_rejects_a_second_rollback_audit_event_with_the_same_idempotency_key`,
+  `::test_activate_release_raises_a_typed_error_on_a_genuine_concurrent_activation_race`, and
+  `::test_rollback_active_release_reconciles_a_lost_race_on_the_same_idempotency_key`. The remaining gap
+  is the in-memory cache read path across multiple instances, not the database — see the
+  multi-instance row above.
