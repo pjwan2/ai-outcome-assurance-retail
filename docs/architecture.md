@@ -138,21 +138,41 @@ check.
 
 `backend/app/serving/` is a second, independent surface mounted into the same FastAPI app
 (`app/api.py::app.include_router(serving_router)`) — it has no dependency on and is not part of the
-case-assurance pipeline above. `POST /api/generate/stream` streams a deterministic, hash-seeded fake
+case-assurance pipeline above. `POST /api/generate/stream` requires the same bearer-token auth as every
+mutating case-pipeline endpoint (`app.auth.require_auth`) and streams a deterministic, hash-seeded fake
 model's output over SSE (`model_backend.py::DeterministicFakeModel`, `sse-starlette`), demonstrating
 the async-serving mechanics a real inference service needs rather than any specific model's behaviour:
-a request/session ID on every response; a per-request timeout (`asyncio.wait_for`); client-disconnect
-detection (`request.is_disconnected()`) that stops generation and releases its concurrency slot;
-bounded in-flight concurrency plus a bounded wait queue, rejecting with `503` once both are full
-(`concurrency.py::ConcurrencyLimiter`); a per-session token-bucket rate limiter returning `429`
-(`rate_limit.py`); `tenacity`-based retry confined to the pre-stream "prime" step (so a retry never
-risks re-sending output already seen by a client), converting an exhausted retry or a mid-stream
-failure into a graceful terminal SSE `error` event rather than a hang or a raw `500`; model/checkpoint
-version on every response; structured JSON logs (`logging_utils.py`); and Prometheus metrics at
-`GET /metrics` (`metrics.py`). `streaming.py::stream_generation` deliberately takes a plain
-`is_disconnected` callable rather than a `Request`, which is what makes its timeout/cancellation/retry
-paths directly unit-testable without an HTTP transport — see `backend/tests/test_serving.py`.
-Load-tested with Locust at 10/50/100 concurrent users; see
+
+- a request ID on every response, and a client-supplied `session_id` used only for log
+  correlation/tracing — never as a security or rate-limit key;
+- a single deadline (`streaming.py::stream_generation`'s `deadline` parameter) covering the *entire*
+  request lifecycle — waiting for a concurrency slot, priming the first token, and every subsequent
+  token in the stream — not just the first token, so a model that answers quickly but then stalls still
+  times out at the deadline a client was told to expect
+  (`tests/test_serving.py::test_deadline_covers_the_full_stream_not_just_the_first_token` is a
+  regression test for an earlier version that only bounded the first-token step);
+- client-disconnect detection (`request.is_disconnected()`) that stops generation and releases its
+  concurrency slot;
+- bounded in-flight concurrency plus a bounded wait queue, rejecting with `503` once both are full
+  (`concurrency.py::ConcurrencyLimiter`), itself bounded by the same overall deadline;
+- a per-*principal* (`Principal.reviewer_id`, not the client-supplied `session_id`) token-bucket rate
+  limiter returning `429` (`rate_limit.py::TokenBucketRateLimiter`), with a bounded, LRU-evicting
+  bucket store so the number of distinct callers ever seen can't grow memory usage without limit;
+- `tenacity`-based retry confined to the pre-stream "prime" step (so a retry never risks re-sending
+  output already seen by a client), converting an exhausted retry or a mid-stream failure into a
+  graceful terminal SSE `error` event rather than a hang or a raw `500`;
+- model/checkpoint version on every response, structured JSON logs (`logging_utils.py`), and Prometheus
+  metrics at `GET /metrics` (`metrics.py`).
+
+`fail_mode` (simulating transient/permanent/mid-stream backend failure) is a construction-time property
+of a `DeterministicFakeModel` instance, injected via FastAPI's dependency-override mechanism
+(`router.py::get_model_backend`) in tests — it is not a field on the public `GenerateRequest` schema, so
+a real client has no way to make the server misbehave on demand. `GenerateRequest` also bounds
+`prompt`/`session_id` length and `timeout_seconds`'s range via Pydantic `Field` constraints.
+`streaming.py::stream_generation` deliberately takes a plain `is_disconnected` callable rather than a
+`Request`, which is what makes its timeout/cancellation/retry paths directly unit-testable without an
+HTTP transport — see `backend/tests/test_serving.py`. Load-tested with Locust at 10/50/100 concurrent
+users, each simulated caller its own authenticated principal; see
 [`docs/performance_report.md`](performance_report.md) for the real results, including the concurrency
 limiter's throughput ceiling confirmed quantitatively.
 

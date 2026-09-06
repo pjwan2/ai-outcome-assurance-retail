@@ -34,13 +34,36 @@
   frontend typecheck/build, confirmed green on GitHub Actions:
   https://github.com/pjwan2/ai-outcome-assurance-retail/actions/runs/31313642354
 - **Bearer-token authn/authz on mutating endpoints.** `app/auth.py::require_auth` gates
-  `POST /api/cases`, `POST /api/cases/{id}/run`, `POST /api/cases/{id}/replay`, and
-  `POST /api/reviews/{id}/decision` — missing/invalid tokens get `401`. Review decisions derive
-  `reviewer_id` from the authenticated token (never a client-supplied field) and check the token's role
-  against `ReviewTask.assigned_role`, returning `403 ROLE_NOT_PERMITTED` on mismatch
-  (`tests/test_api.py::test_create_case_requires_auth`,
+  `POST /api/cases`, `POST /api/cases/{id}/run`, `POST /api/cases/{id}/replay`,
+  `POST /api/reviews/{id}/decision`, and `POST /api/generate/stream` — missing/invalid tokens get
+  `401`. Review decisions derive `reviewer_id` from the authenticated token (never a client-supplied
+  field) and check the token's role against `ReviewTask.assigned_role`, returning
+  `403 ROLE_NOT_PERMITTED` on mismatch (`tests/test_api.py::test_create_case_requires_auth`,
   `::test_wrong_role_cannot_decide_review`). This is a static token map, not enterprise IAM — see
   `docs/production_gap_register.md`.
+- **Rate-limit key is the authenticated principal, not a client-supplied value.**
+  `app/serving/router.py::generate_stream` keys its `TokenBucketRateLimiter` on
+  `principal.reviewer_id`, derived from the same bearer token as the auth check above — a request body
+  `session_id` is accepted for log correlation only and has no effect on the rate limit. An earlier
+  version keyed the limiter on the client-supplied `session_id` directly, which a client could rotate
+  on every request to bypass its own limit entirely; found and fixed, proven by
+  `tests/test_serving.py::test_rate_limit_is_keyed_by_principal_not_client_supplied_session_id`.
+- **No client-controllable failure-injection surface.** An earlier version of `POST
+  /api/generate/stream` accepted a `fail_mode` field on the public request body — a real client could
+  have forced the server into its own error paths. `fail_mode` is now a construction-time property of a
+  `DeterministicFakeModel` instance, reachable only through FastAPI's dependency-override mechanism in
+  tests (`app/serving/router.py::get_model_backend`); `GenerateRequest` has no such field. `prompt`
+  (1-4000 chars), `session_id` (≤128 chars), and `timeout_seconds` (0 < t ≤ 60) are all bounded by
+  Pydantic `Field` constraints, rejecting malformed input with `422` before any handler code runs.
+- **Bounded rate-limiter memory.** `app/serving/rate_limit.py::TokenBucketRateLimiter` caps the number
+  of tracked buckets (`max_tracked_keys`, default 10,000) with LRU eviction — an unbounded number of
+  distinct callers cannot grow its memory footprint without limit.
+- **Deadline covers the whole request, not just the first token.** `POST /api/generate/stream`'s
+  `timeout_seconds` used to bound only the pre-stream "prime" step; a model that answered quickly but
+  then stalled mid-stream could run well past the timeout a client was told to expect. A single
+  deadline (`app/serving/streaming.py::stream_generation`) now covers the concurrency-slot wait, the
+  first token, and every subsequent token — found and fixed, regression-tested by
+  `tests/test_serving.py::test_deadline_covers_the_full_stream_not_just_the_first_token`.
 - **Containers run unprivileged.** `backend/Dockerfile` creates and switches to a
   non-root `app` user before `CMD` runs — the process never runs as root, and
   `/data` is chowned to that user so the SQLite volume stays writable. The
@@ -93,7 +116,6 @@
 - No live network ingestion exists in this repository, so a URL allow-list, timeouts, size limits and
   content-type checks for "any optional ingestion command" (PRD §20) have no code to attach to yet.
   Fixtures are local, versioned JSON files only.
-- No dependency/SCA scanner is wired into CI yet.
 - **CORS is wide open** (`allow_origins=["*"]` in `app/api.py`) to let the Vite dev server (different
   port) call the API during local demos — a same-machine, no-real-data convenience, unrelated to (and
   not a substitute for) the bearer-token authz above. Must be scoped to a specific origin before any

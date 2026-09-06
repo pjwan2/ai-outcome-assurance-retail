@@ -3,19 +3,28 @@ and bounded concurrency/backpressure in front of app.serving.streaming's
 timeout/cancellation/retry logic. Deliberately independent of
 app.services.workflow — this is a parallel serving slice demonstrating
 async-serving engineering, not part of the case-assurance domain pipeline.
+
+Requires the same bearer-token auth as every mutating case-pipeline endpoint
+(`app.auth.require_auth`) — the rate limiter is keyed by the authenticated
+principal, not a client-supplied session_id, so a caller cannot reset its own
+limit by sending a new session_id on the next request. `session_id` in the
+request body is correlation/tracing only, never a security identity.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 import uuid
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from app.auth import Principal, require_auth
 from app.serving.concurrency import BackpressureRejected, ConcurrencyLimiter
 from app.serving.metrics import (
     CONTENT_TYPE_LATEST,
@@ -35,6 +44,7 @@ MAX_QUEUED = int(os.environ.get("SERVING_MAX_QUEUE", "20"))
 RATE_LIMIT_CAPACITY = int(os.environ.get("SERVING_RATE_LIMIT_CAPACITY", "20"))
 RATE_LIMIT_REFILL_PER_SECOND = float(os.environ.get("SERVING_RATE_LIMIT_REFILL", "5"))
 DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("SERVING_DEFAULT_TIMEOUT_SECONDS", "10"))
+MAX_TIMEOUT_SECONDS = float(os.environ.get("SERVING_MAX_TIMEOUT_SECONDS", "60"))
 # Token pacing is env-configurable so a load test (backend/loadtest/) can
 # make each stream take long enough (real LLM-response-shaped, ~1-2s) to
 # actually exercise concurrency/backpressure at realistic user counts — the
@@ -49,11 +59,20 @@ RATE_LIMITER = TokenBucketRateLimiter(capacity=RATE_LIMIT_CAPACITY, refill_rate=
 MODEL = DeterministicFakeModel(token_delay_seconds=TOKEN_DELAY_SECONDS, num_tokens=NUM_TOKENS)
 
 
+def get_model_backend() -> DeterministicFakeModel:
+    """FastAPI dependency, overridden in tests
+    (`app.dependency_overrides[get_model_backend] = ...`) to inject a model
+    configured with a specific `fail_mode` — that is the only way to make a
+    request fail on demand; it is not a field a real client can set (see
+    app.serving.model_backend.DeterministicFakeModel)."""
+    return MODEL
+
+
 class GenerateRequest(BaseModel):
-    prompt: str
-    session_id: str | None = None
-    timeout_seconds: float | None = None
-    fail_mode: str | None = None  # testing knob: "transient" | "permanent" | "mid_stream" | None
+    prompt: str = Field(min_length=1, max_length=4000)
+    # Correlation/tracing only — never used as a security or rate-limit key.
+    session_id: str | None = Field(default=None, max_length=128)
+    timeout_seconds: float | None = Field(default=None, gt=0, le=MAX_TIMEOUT_SECONDS)
 
 
 def _json_error(status_code: int, error_code: str, message: str, *, headers: dict[str, str] | None = None) -> Response:
@@ -66,12 +85,18 @@ def _json_error(status_code: int, error_code: str, message: str, *, headers: dic
 
 
 @router.post("/api/generate/stream")
-async def generate_stream(request: Request, body: GenerateRequest) -> Response:
+async def generate_stream(
+    request: Request,
+    body: GenerateRequest,
+    principal: Principal = Depends(require_auth),
+    model: DeterministicFakeModel = Depends(get_model_backend),
+) -> Response:
     request_id = f"REQ-{uuid.uuid4().hex[:12]}"
-    session_id = body.session_id or f"SESSION-{uuid.uuid4().hex[:8]}"
+    session_id = body.session_id or request_id
+    deadline = time.monotonic() + (body.timeout_seconds or DEFAULT_TIMEOUT_SECONDS)
 
     try:
-        RATE_LIMITER.check(session_id)
+        RATE_LIMITER.check(principal.reviewer_id)
     except RateLimitExceeded as exc:
         RATE_LIMITED_TOTAL.inc()
         return _json_error(
@@ -83,20 +108,25 @@ async def generate_stream(request: Request, body: GenerateRequest) -> Response:
 
     slot = LIMITER.slot()
     try:
-        await slot.__aenter__()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        await asyncio.wait_for(slot.__aenter__(), timeout=remaining)
     except BackpressureRejected as exc:
         ERRORS_TOTAL.labels(reason="backpressure").inc()
         return _json_error(503, "SERVER_BUSY", str(exc))
+    except TimeoutError:
+        ERRORS_TOTAL.labels(reason="queue_timeout").inc()
+        return _json_error(503, "QUEUE_TIMEOUT", "Timed out waiting for a free concurrency slot")
 
     IN_FLIGHT.inc()
 
     async def _generate_and_release():
         try:
             async for event in stream_generation(
-                model=MODEL,
+                model=model,
                 prompt=body.prompt,
-                fail_mode=body.fail_mode,
-                timeout_seconds=body.timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
+                deadline=deadline,
                 request_id=request_id,
                 session_id=session_id,
                 is_disconnected=request.is_disconnected,

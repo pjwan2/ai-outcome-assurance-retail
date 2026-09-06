@@ -4,6 +4,14 @@ decoupled from FastAPI/Starlette: `stream_generation` takes a plain
 timeout/cancellation/retry/error paths unit-testable without spinning up an
 HTTP transport (see backend/tests/test_serving.py).
 
+`deadline` is a single absolute `time.monotonic()` value covering the whole
+request lifecycle — priming the first token *and* every subsequent token in
+the stream. A model that produces its first token quickly but then stalls
+mid-stream still times out at the same overall deadline a client was told to
+expect, rather than only being deadline-checked once at the start (the
+concurrency-slot wait in app/serving/router.py is bounded by this same
+deadline too, computed before this function is ever called).
+
 Rate limiting and concurrency/backpressure are handled by the caller
 (app/serving/router.py) before this function is ever invoked — this module
 owns only what happens once a request has already been admitted.
@@ -35,12 +43,18 @@ from app.serving.model_backend import (
 RETRY_MAX_ATTEMPTS = 3
 
 
+async def _await_within_deadline[T](awaitable: Awaitable[T], deadline: float) -> T:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError
+    return await asyncio.wait_for(awaitable, timeout=remaining)
+
+
 async def stream_generation(
     *,
     model: DeterministicFakeModel,
     prompt: str,
-    fail_mode: str | None,
-    timeout_seconds: float,
+    deadline: float,
     request_id: str,
     session_id: str,
     is_disconnected: Callable[[], Awaitable[bool]],
@@ -56,20 +70,14 @@ async def stream_generation(
 
     try:
         try:
-            gen, first_token = await asyncio.wait_for(
-                prime_generation(
-                    model,
-                    prompt,
-                    fail_mode,
-                    max_attempts=RETRY_MAX_ATTEMPTS,
-                    on_retry=RETRIES_TOTAL.inc,
-                ),
-                timeout=timeout_seconds,
+            gen, first_token = await _await_within_deadline(
+                prime_generation(model, prompt, max_attempts=RETRY_MAX_ATTEMPTS, on_retry=RETRIES_TOTAL.inc),
+                deadline,
             )
         except TimeoutError:
             status = "timeout"
             ERRORS_TOTAL.labels(reason="timeout").inc()
-            log_event("generate_timeout", request_id=request_id, session_id=session_id)
+            log_event("generate_timeout", request_id=request_id, session_id=session_id, phase="prime")
             yield {"event": "error", "data": _error_payload(request_id, "TIMEOUT")}
             return
         except (TransientBackendError, PermanentBackendError) as exc:
@@ -87,13 +95,29 @@ async def stream_generation(
         yield {"event": "token", "data": _token_payload(first_token)}
 
         try:
-            async for token in gen:
+            while True:
+                try:
+                    token = await _await_within_deadline(gen.__anext__(), deadline)
+                except StopAsyncIteration:
+                    break
                 if await is_disconnected():
                     status = "cancelled"
                     return
                 tokens_emitted += 1
                 TOKENS_GENERATED_TOTAL.inc()
                 yield {"event": "token", "data": _token_payload(token)}
+        except TimeoutError:
+            status = "timeout"
+            ERRORS_TOTAL.labels(reason="timeout").inc()
+            log_event(
+                "generate_timeout",
+                request_id=request_id,
+                session_id=session_id,
+                phase="stream",
+                tokens_emitted=tokens_emitted,
+            )
+            yield {"event": "error", "data": _error_payload(request_id, "TIMEOUT")}
+            return
         except (TransientBackendError, PermanentBackendError) as exc:
             status = "backend_error"
             ERRORS_TOTAL.labels(reason=type(exc).__name__).inc()

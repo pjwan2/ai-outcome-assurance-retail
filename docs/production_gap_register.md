@@ -25,9 +25,8 @@ mistaken for a production claim.
 | Live model behind `app/serving/` | No real inference call anywhere — `DeterministicFakeModel` is hash-seeded and offline by design | The async-serving mechanics (streaming, timeout, cancellation, retry, backpressure, rate limiting) are real; the model behind them is not |
 | Distributed rate limiting / concurrency control | `ConcurrencyLimiter` and `TokenBucketRateLimiter` (`app/serving/`) are in-process, single-instance, in-memory | A multi-replica deployment would need a shared store (e.g. Redis) — not implemented |
 
-These five rows exist specifically because a public capability claim (resume, cover letter, or verbal)
-must never outrun what this repository can independently prove — see
-`docs/verification_matrix.md`'s "Scope of this public repository".
+These five rows exist specifically because a public capability claim must never outrun what this
+repository can independently prove — see `docs/verification_matrix.md`'s "Scope".
 
 ## Resolved since the previous version of this document
 

@@ -48,9 +48,11 @@ class DeterministicFakeModel:
     """Given a prompt, deterministically derives a token sequence (hash-seeded)
     and yields tokens with configurable per-token latency.
 
-    `fail_mode` is a request-supplied testing knob (never something a real
-    client would set in production), letting tests exercise every failure
-    path deterministically:
+    `fail_mode` is a construction-time testing knob — set only by whoever
+    builds the model instance (a test, via FastAPI's dependency-override
+    mechanism; never a client), not a field on the public request schema. A
+    real caller of `POST /api/generate/stream` has no way to influence it.
+    Values:
       - "transient": fails before yielding anything, but only while
         `attempt` is below the model's own recovery point — a subsequent
         retry with a higher `attempt` succeeds.
@@ -61,9 +63,12 @@ class DeterministicFakeModel:
         stream gracefully, not retry (partial output was already sent).
     """
 
-    def __init__(self, token_delay_seconds: float = 0.01, num_tokens: int = 8) -> None:
+    def __init__(
+        self, token_delay_seconds: float = 0.01, num_tokens: int = 8, fail_mode: str | None = None
+    ) -> None:
         self.token_delay_seconds = token_delay_seconds
         self.num_tokens = num_tokens
+        self.fail_mode = fail_mode
         self.info = DEFAULT_MODEL_INFO
 
     def _tokens_for(self, prompt: str) -> list[str]:
@@ -71,16 +76,14 @@ class DeterministicFakeModel:
         span = max(1, len(digest) // self.num_tokens)
         return [digest[i : i + span] for i in range(0, span * self.num_tokens, span)]
 
-    async def generate(
-        self, prompt: str, *, attempt: int = 1, fail_mode: str | None = None
-    ) -> AsyncIterator[str]:
-        if fail_mode == "transient" and attempt < 3:
+    async def generate(self, prompt: str, *, attempt: int = 1) -> AsyncIterator[str]:
+        if self.fail_mode == "transient" and attempt < 3:
             raise TransientBackendError(f"simulated transient failure (attempt {attempt})")
-        if fail_mode == "permanent":
+        if self.fail_mode == "permanent":
             raise PermanentBackendError("simulated permanent failure")
 
         for index, token in enumerate(self._tokens_for(prompt)):
-            if fail_mode == "mid_stream" and index == 3:
+            if self.fail_mode == "mid_stream" and index == 3:
                 raise PermanentBackendError("simulated mid-stream failure")
             await asyncio.sleep(self.token_delay_seconds)
             yield token
@@ -89,7 +92,6 @@ class DeterministicFakeModel:
 async def prime_generation(
     model: DeterministicFakeModel,
     prompt: str,
-    fail_mode: str | None,
     *,
     max_attempts: int = 3,
     on_retry: Callable[[], None] | None = None,
@@ -105,7 +107,7 @@ async def prime_generation(
 
     async def _attempt() -> tuple[AsyncIterator[str], str]:
         attempt_counter["n"] += 1
-        gen = model.generate(prompt, attempt=attempt_counter["n"], fail_mode=fail_mode)
+        gen = model.generate(prompt, attempt=attempt_counter["n"])
         first_token = await gen.__anext__()
         return gen, first_token
 

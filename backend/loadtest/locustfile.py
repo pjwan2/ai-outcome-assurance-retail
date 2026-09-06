@@ -11,15 +11,24 @@ custom Locust metrics:
     completion (any terminal state: done, error, or client-side give-up).
 
 Run against a real running server (not TestClient) — see
-docs/performance_report.md for exact commands and results.
+docs/performance_report.md for exact commands and results, including the
+`API_TOKENS` value used to give each simulated user its own rate-limit
+identity (the limiter is keyed by authenticated principal, not
+client-supplied session_id — see app/serving/router.py — so every simulated
+user sharing one token would all share one rate-limit bucket, which is not
+a realistic multi-caller load pattern).
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import time
 
 from locust import HttpUser, between, events, task
+
+TOKEN_POOL_SIZE = 20
+_token_cycle = itertools.cycle(f"loadtest-token-{i}" for i in range(TOKEN_POOL_SIZE))
 
 
 def _fire(request_type: str, name: str, response_time_ms: float, exception: Exception | None = None) -> None:
@@ -36,6 +45,13 @@ def _fire(request_type: str, name: str, response_time_ms: float, exception: Exce
 class GenerateUser(HttpUser):
     wait_time = between(0.05, 0.3)
 
+    def on_start(self) -> None:
+        # Each simulated user gets its own token/principal, cycling through
+        # TOKEN_POOL_SIZE identities, so the rate limiter (keyed by
+        # authenticated principal) sees a realistic spread of callers instead
+        # of every request landing in one shared bucket.
+        self.auth_headers = {"Authorization": f"Bearer {next(_token_cycle)}"}
+
     @task(6)
     def stream_to_completion(self) -> None:
         start = time.perf_counter()
@@ -45,6 +61,7 @@ class GenerateUser(HttpUser):
             with self.client.post(
                 "/api/generate/stream",
                 json={"prompt": "load test prompt, please stream a response"},
+                headers=self.auth_headers,
                 stream=True,
                 catch_response=True,
                 name="/api/generate/stream [complete]",
@@ -90,6 +107,7 @@ class GenerateUser(HttpUser):
             with self.client.post(
                 "/api/generate/stream",
                 json={"prompt": "cancel me halfway through"},
+                headers=self.auth_headers,
                 stream=True,
                 catch_response=True,
                 name="/api/generate/stream [client-cancelled]",

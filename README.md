@@ -35,7 +35,7 @@ Full architecture, including the control-boundary diagram (why the model never o
 ```bash
 make setup
 make migrate
-make test        # 81 tests
+make test        # 87 tests
 make lint        # ruff, clean
 make typecheck    # mypy, clean
 make eval         # R1 PASS / R2 BLOCK release-gate JSON
@@ -100,11 +100,14 @@ dev token automatically; set `API_TOKENS` in `.env` for anything beyond a solo l
 - **Containerised**: `docker-compose.yml` runs the backend (auto-migrating on boot) and an
   nginx-served frontend build. Both containers run as unprivileged users, not root.
 - **Model-serving slice** (`backend/app/serving/`, independent of the case-assurance pipeline above):
-  `POST /api/generate/stream` streams a deterministic fake model's output over SSE with a real
-  request/session ID, per-request timeout, client-disconnect detection that releases its concurrency
-  slot, bounded in-flight concurrency + a bounded wait queue (HTTP 503 backpressure once both are
-  full), a per-session token-bucket rate limiter (HTTP 429), `tenacity`-based retry on transient
-  pre-stream failures with a graceful terminal SSE error on exhaustion or a mid-stream failure,
+  bearer-token-authenticated `POST /api/generate/stream` streams a deterministic fake model's output
+  over SSE with a request ID, a single deadline covering the whole lifecycle (queue wait + first token
+  + every subsequent token, not just the first), client-disconnect detection that releases its
+  concurrency slot, bounded in-flight concurrency + a bounded wait queue (HTTP 503 backpressure once
+  both are full), a per-*authenticated-principal* token-bucket rate limiter with a bounded/LRU-evicting
+  store (HTTP 429 — a client can't reset its own limit by sending a new session_id), `tenacity`-based
+  retry on transient pre-stream failures (injected only via dependency override in tests, never a
+  client-facing field) with a graceful terminal SSE error on exhaustion or a mid-stream failure,
   model/checkpoint version on every response, structured JSON logs, and Prometheus metrics at
   `GET /metrics`. No live model call anywhere — see `docs/production_gap_register.md`. Load-tested with
   Locust at 10/50/100 concurrent users — see [`docs/performance_report.md`](docs/performance_report.md).
@@ -117,13 +120,8 @@ Full docs: [`docs/architecture.md`](docs/architecture.md) ·
 [`docs/security.md`](docs/security.md) ·
 [`docs/verification_matrix.md`](docs/verification_matrix.md).
 
-## Scope and development process
+## Development notes
 
-This is a reduced, public engineering prototype, not the entirety of any contributor's work — see
-[`docs/verification_matrix.md`](docs/verification_matrix.md)'s "Scope of this public repository" before
-comparing it against anything else (a resume, a different codebase). Built with Claude Code throughout;
-every commit's `Co-Authored-By: Claude Sonnet 5` trailer in `git log` is a real, unedited record of
-that, not an assertion made here. Architecture decisions, acceptance criteria, test design, debugging,
-and final verification of every claim in this repository's docs are the author's own responsibility —
-see [`docs/development_provenance.md`](docs/development_provenance.md) for the original development
-brief and a fuller account of what that division of labor means.
+Claude Code was used to accelerate implementation. I owned the architecture, acceptance criteria, test
+strategy, failure analysis, and final verification. AI assistance remains attributed in the commit
+history.

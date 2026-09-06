@@ -2,16 +2,13 @@
 
 No self-assessed seniority claims below — only what is runnable and where.
 
-## Scope of this public repository
+## Scope
 
-This repository is a reduced, public vertical slice, not the entirety of any author's work. If a
-resume, cover letter, or conversation references a broader prototype — a larger test suite, structure-
-aware document ingestion, a reranking stage, document-owner/scope metadata, or document-level
-read-permission enforcement — that describes earlier or separate work, and none of it is reproduced in
-this codebase. Nothing in this repository should be read as evidence for those specific capabilities.
-This repository's own, independently reproducible count is whatever `make test` / `pytest -q` prints
-right now (`backend/tests/`) — currently 81 passing tests — never a number quoted from memory. See
-`docs/production_gap_register.md` for the maintained list of what this repository does not implement.
+This matrix covers only the capabilities independently reproducible in this public repository. Other
+private or earlier work is outside its verification scope. The count below is whatever `make test` /
+`pytest -q` prints right now (`backend/tests/`) — currently 87 passing tests — never a number quoted
+from memory. See `docs/production_gap_register.md` for the maintained list of what this repository
+does not implement.
 
 ## IMPLEMENTED AND VERIFIED
 
@@ -36,8 +33,10 @@ right now (`backend/tests/`) — currently 81 passing tests — never a number q
 | `TraceEvent` SHA-256 hash chain (tamper/reorder detection) | `app/services/trace.py::TraceRecorder`, `verify_trace_chain()` | `pytest tests/test_trace_chain.py`, `GET /api/cases/{case_id}/trace/verify` |
 | Counter-evidence linked on contradictory claims | `app/services/resolve.py::resolve_claims` populates `Claim.counter_evidence_ids` | `pytest tests/test_adversarial.py::test_contradiction_populates_counter_evidence_ids` |
 | Ruff + mypy clean | — | `make lint`, `make typecheck` |
-| 81 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
-| Model-serving slice: async SSE streaming, timeout, client-disconnect releases its concurrency slot, bounded concurrency/backpressure (503), per-session rate limiting (429), retry-then-graceful-failure on both pre-stream and mid-stream backend errors, model/checkpoint version on every response | `app/serving/` (`model_backend.py`, `concurrency.py`, `rate_limit.py`, `streaming.py`, `router.py`) | `pytest tests/test_serving.py` (13 tests) |
+| 87 passing automated tests, 0 mocked validators/authority logic | `backend/tests/` | `make test` |
+| Model-serving slice: bearer-token-authenticated async SSE streaming, one deadline covering the whole request (queue wait + first token + full stream, not just the first token), client-disconnect releases its concurrency slot, bounded concurrency/backpressure (503), rate limiting keyed by authenticated principal not client-supplied session_id (429), retry-then-graceful-failure on both pre-stream and mid-stream backend errors, model/checkpoint version on every response | `app/serving/` (`model_backend.py`, `concurrency.py`, `rate_limit.py`, `streaming.py`, `router.py`) | `pytest tests/test_serving.py` (19 tests) |
+| Rate-limit key cannot be spoofed by rotating session_id; a real bug found and fixed | `app/serving/router.py::generate_stream` keys `RATE_LIMITER.check` on `principal.reviewer_id` | `pytest tests/test_serving.py::test_rate_limit_is_keyed_by_principal_not_client_supplied_session_id` |
+| Fake-model failure injection is a dependency override, not a public request field — a real bug found and fixed | `app/serving/router.py::get_model_backend`, `DeterministicFakeModel.fail_mode` (construction-time only) | `pytest tests/test_serving.py -k failure_recovers or exhausts_retries or mid_stream_failure` |
 | Structured JSON logs and Prometheus metrics for the serving slice, exposed over real HTTP | `app/serving/logging_utils.py`, `app/serving/metrics.py`, `GET /metrics` | `pytest tests/test_serving.py -k "metrics or structured_log"` |
 | No live model call anywhere in the serving slice — a deterministic, hash-seeded fake model | `app/serving/model_backend.py::DeterministicFakeModel` | `pytest tests/test_serving.py::test_repeated_prompt_is_deterministic` |
 | Dependency vulnerabilities found and fixed, not just scanned: `pip-audit` surfaced 7 CVEs against the previously-resolved `starlette==0.50.0`; fixed by pairing `fastapi==0.141.1` with `starlette==1.6.0` (the first fastapi release with no `starlette<0.51` ceiling), full suite re-verified green after | `backend/requirements.txt`, `docs/security.md` | `pip-audit -r requirements.txt` → "No known vulnerabilities found" |
